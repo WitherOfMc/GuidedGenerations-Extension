@@ -1433,15 +1433,6 @@ async function setup() {
     // Load extension settings
     loadSettings();
     
-    // Initialize event listeners for profile and preset switching
-    try {
-        const { initializeEventListeners } = await import('./scripts/utils/presetUtils.js');
-        initializeEventListeners();
-        console.log(`${extensionName}: Event listeners initialized for profile/preset switching`);
-    } catch (error) {
-        console.warn(`${extensionName}: Could not initialize event listeners:`, error);
-    }
-    
     // Initial UI update - executes after settings are verified loaded
     updateExtensionButtons(); // Initial button creation/update
     // Start the QR Bar integration
@@ -1615,18 +1606,7 @@ $(document).ready(async function () {
                     updatePersistentGuideCounterDebounced();
                 }
                 
-                // Handle profile and preset changes for the switching system
-                if (eventName === context.eventTypes.CONNECTION_PROFILE_LOADED) {
-                    const profileName = args[0];
-                    console.log(`${extensionName}: Profile change detected: "${profileName}"`);
-                    // Emit a custom event that presetUtils can listen for
-                    window.dispatchEvent(new CustomEvent('gg-profile-changed', { detail: { profileName } }));
-                } else if (eventName === context.eventTypes.PRESET_CHANGED) {
-                    const presetInfo = args[0];
-                    console.log(`${extensionName}: Preset change detected:`, presetInfo);
-                    // Emit a custom event that presetUtils can listen for
-                    window.dispatchEvent(new CustomEvent('gg-preset-changed', { detail: { presetInfo } }));
-                }
+                // Profile/preset switching events no longer needed for direct calls
             });
         } else {
             console.warn(`${extensionName}: An event type in eventsToUpdateCounter was undefined or not a string. Skipping listener registration for it. Event: `, eventName);

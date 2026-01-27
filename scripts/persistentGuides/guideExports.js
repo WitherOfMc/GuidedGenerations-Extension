@@ -5,7 +5,7 @@
 
 // External dependencies (SillyTavern)
 import { getContext, extension_settings, renderExtensionTemplateAsync } from '../../../../../extensions.js';
-import { chat, eventSource, event_types, saveChatConditional, addOneMessage } from '../../../../../../script.js';
+import { chat, eventSource, event_types, saveChatConditional, addOneMessage, deactivateSendButtons, activateSendButtons, setExternalAbortController, setSendButtonState } from '../../../../../../script.js';
 
 // Core extension constants and functions (defined locally to avoid circular dependency)
 const extensionName = "GuidedGenerations-Extension";
@@ -50,6 +50,16 @@ function isGroupChat() {
     return context && context.groupId && context.groups;
 }
 
+// Optional prompt manager helpers (SillyTavern openai.js)
+async function getOpenAIPromptManagerHelpers() {
+    try {
+        return await import('../../../../../../scripts/openai.js');
+    } catch (error) {
+        debugWarn(`[${extensionName}] Failed to load openai prompt manager helpers:`, error);
+        return null;
+    }
+}
+
 // Settings management functions - imported from index.js
 import { loadSettings, updateSettingsUI, addSettingsEventListeners, debugProfileSystem, getDebugMessages, clearDebugMessages, getDebugMessagesAsText, debugError } from '../../index.js';
 
@@ -79,7 +89,8 @@ const defaultSettings = {
 };
 
 // Utility functions
-import { handleSwitching, getProfileApiType, getPresetsForApiType, getCurrentProfile, getProfileList, switchToProfile, switchToPreset, withProfile, getConnectApiMap, initializeEventListeners, extractApiIdFromApiType } from '../utils/presetUtils.js';
+import { getProfileApiType, getPresetsForApiType, getCurrentProfile, getProfileList, getConnectApiMap, extractApiIdFromApiType } from '../utils/presetUtils.js';
+import { requestCompletion, shouldUseDirectCall } from '../utils/llmClient.js';
 
 // Guide functions
 import situationalGuide from './situationalGuide.js';
@@ -131,20 +142,21 @@ export {
     event_types,
     saveChatConditional,
     addOneMessage,
+    deactivateSendButtons,
+    activateSendButtons,
+    setExternalAbortController,
+    setSendButtonState,
     renderExtensionTemplateAsync,
     
     // Utility functions
-    handleSwitching,
     getProfileApiType,
     getPresetsForApiType,
     getCurrentProfile,
     getProfileList,
-    switchToProfile,
-    switchToPreset,
-    withProfile,
     getConnectApiMap,
-    initializeEventListeners,
     extractApiIdFromApiType,
+    requestCompletion,
+    shouldUseDirectCall,
     
     // Guides
     runGuideScript,
@@ -202,4 +214,5 @@ export {
     getDebugMessages,
     clearDebugMessages,
     getDebugMessagesAsText,
+    getOpenAIPromptManagerHelpers,
 };

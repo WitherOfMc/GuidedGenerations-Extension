@@ -38,15 +38,6 @@ export async function loadSettingsPanel() {
                 updateSettingsUI();
                 addSettingsEventListeners();
 
-                // Initialize event listeners for profile and preset switching
-                try {
-                    const { initializeEventListeners } = await import('./persistentGuides/guideExports.js');
-                    initializeEventListeners();
-                    debugLog(`[${extensionName}] Event listeners initialized for profile/preset switching in settings panel`);
-                } catch (error) {
-                    debugWarn(`[${extensionName}] Could not initialize event listeners in settings panel:`, error);
-                }
-
                 // Setup preset and clear buttons with native event handlers
                 const presetButtons = container.querySelectorAll('.gg-preset-button');
                 presetButtons.forEach(btn => {

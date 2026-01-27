@@ -2,7 +2,7 @@
  * Fun Popup - Handles UI for fun prompts and interactions
  */
 
-import { getContext, extension_settings, extensionName, debugLog, handleSwitching } from '../persistentGuides/guideExports.js'; // Import from central hub
+import { getContext, extension_settings, extensionName, debugLog, requestCompletion, shouldUseDirectCall } from '../persistentGuides/guideExports.js'; // Import from central hub
 
 // Map to store fun prompts loaded from file
 let FUN_PROMPTS = {};
@@ -159,25 +159,12 @@ export class FunPopup {
             return;
         }
 
-        // Handle profile and preset switching using unified utility
+        // Resolve target profile and preset from settings
         const profileKey = 'profileFun';
         const presetKey = 'presetFun';
         const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
         const presetValue = extension_settings[extensionName]?.[presetKey] ?? '';
         debugLog(`${extensionName}: Using profile: ${profileValue || 'current'}, preset: ${presetValue || 'none'}`);
-        
-        // Capture the original profile BEFORE any switching happens
-        let originalProfile = '';
-        try {
-            // Get current profile before any switching
-            const { getCurrentProfile } = await import('../persistentGuides/guideExports.js');
-            originalProfile = await getCurrentProfile();
-            debugLog(`[FunPopup] Captured original profile before switching: "${originalProfile}"`);
-        } catch (error) {
-            debugLog(`[FunPopup] Could not get original profile:`, error);
-        }
-        
-        const { switch: switchProfileAndPreset, restore } = await handleSwitching(profileValue, presetValue, originalProfile);
 
         // Get the current input from the textarea
         const textarea = document.getElementById('send_textarea');
@@ -186,69 +173,134 @@ export class FunPopup {
         // Get the configured injection role from settings
         const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
 
-        let stscriptCommand = '';
         const filledPrompt = promptText.replace(/\n/g, '\\n'); // Escape newlines for the script
+        const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
 
-        // Check if it's a group chat
-        if (context.groupId) {
-            let characterListJson = '[]';
-            try {
-                const groups = context.groups || [];
-                const currentGroup = groups.find(group => group.id === context.groupId);
+        try {
+            if (useDirectCall) {
+                // Check if it's a group chat
+                let selectedCharacter = '';
+                if (context.groupId) {
+                    let characterList = [];
+                    try {
+                        const groups = context.groups || [];
+                        const currentGroup = groups.find(group => group.id === context.groupId);
 
-                if (currentGroup && Array.isArray(currentGroup.members)) {
-                    const characterNames = currentGroup.members.map(member => {
-                        return (typeof member === 'string' && member.toLowerCase().endsWith('.png')) ? member.slice(0, -4) : member;
-                    }).filter(Boolean);
-
-                    if (characterNames.length > 0) {
-                        characterListJson = JSON.stringify(characterNames);
+                        if (currentGroup && Array.isArray(currentGroup.members)) {
+                            characterList = currentGroup.members.map(member => {
+                                return (typeof member === 'string' && member.toLowerCase().endsWith('.png')) ? member.slice(0, -4) : member;
+                            }).filter(Boolean);
+                        }
+                    } catch (error) {
+                        console.error(`${extensionName}: Error processing group members:`, error);
+                    }
+                    if (characterList.length > 0) {
+                        const characterListJson = JSON.stringify(characterList);
+                        const selectionResult = await context.executeSlashCommandsWithOptions(
+                            `/buttons labels=${characterListJson} "Select character to respond"`,
+                            { showOutput: false, handleExecutionErrors: true }
+                        );
+                        if (selectionResult?.pipe) {
+                            selectedCharacter = String(selectionResult.pipe).trim();
+                        }
                     }
                 }
-            } catch (error) {
-                console.error(`${extensionName}: Error processing group members:`, error);
-            }
 
-            if (characterListJson !== '[]') {
-                stscriptCommand = 
+                const promptWithInput = `${filledPrompt}In addition, make sure to take the following into consideration: ${currentInput}`;
+                const responseText = await requestCompletion({
+                    profileName: profileValue,
+                    presetName: presetValue,
+                    prompt: promptWithInput,
+                    debugLabel: 'funPopup',
+                });
+
+                if (!responseText || responseText.trim() === '') {
+                    debugLog('[FunPopup] No response received from completion.');
+                    return;
+                }
+
+                const fallbackCharacter = (() => {
+                    const lastAssistant = [...(context.chat || [])].reverse().find(message => !message?.is_user);
+                    return lastAssistant?.name || 'Assistant';
+                })();
+                const characterName = selectedCharacter || context?.characters?.[context.characterId]?.name || fallbackCharacter;
+
+                const message = {
+                    name: characterName,
+                    is_user: false,
+                    is_system: false,
+                    send_date: Date.now(),
+                    mes: responseText,
+                    force_avatar: null,
+                    extra: {
+                        type: 'funprompt',
+                        gen_id: Date.now(),
+                        api: profileValue || 'manual',
+                        model: profileValue || 'manual',
+                        role: injectionRole,
+                    },
+                };
+
+                context.chat.push(message);
+                await context.eventSource.emit('MESSAGE_SENT', context.chat.length - 1);
+                if (typeof context.addOneMessage === 'function') {
+                    await context.addOneMessage(message);
+                }
+                await context.eventSource.emit('USER_MESSAGE_RENDERED', context.chat.length - 1);
+                if (typeof context.saveChat === 'function') {
+                    await context.saveChat();
+                }
+            } else {
+                let stscriptCommand = '';
+                if (context.groupId) {
+                    let characterListJson = '[]';
+                    try {
+                        const groups = context.groups || [];
+                        const currentGroup = groups.find(group => group.id === context.groupId);
+
+                        if (currentGroup && Array.isArray(currentGroup.members)) {
+                            const characterNames = currentGroup.members.map(member => {
+                                return (typeof member === 'string' && member.toLowerCase().endsWith('.png')) ? member.slice(0, -4) : member;
+                            }).filter(Boolean);
+
+                            if (characterNames.length > 0) {
+                                characterListJson = JSON.stringify(characterNames);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`${extensionName}: Error processing group members:`, error);
+                    }
+
+                    if (characterListJson !== '[]') {
+                        stscriptCommand = 
 `// Group chat logic for Fun Prompt|
 /buttons labels=${characterListJson} "Select character to respond"|
 /setglobalvar key=selection {{pipe}}|
 /inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
 /trigger await=true {{getglobalvar::selection}}|
 `;
-            } else {
-                // Fallback for group chat if members can't be found
-                stscriptCommand = `// Fallback logic for Fun Prompt|
+                    } else {
+                        // Fallback for group chat if members can't be found
+                        stscriptCommand = `// Fallback logic for Fun Prompt|
 /inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
 /trigger await=true|
 `;
-            }
-        } else {
-            // Single character logic
-            stscriptCommand = `// Single character logic for Fun Prompt|
+                    }
+                } else {
+                    // Single character logic
+                    stscriptCommand = `// Single character logic for Fun Prompt|
 /inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
 /trigger await=true|
 `;
-        }
+                }
 
-        try {
-            // Switch profile and preset before executing
-            await switchProfileAndPreset();
-            
-            // Execute the command
-            await context.executeSlashCommandsWithOptions(stscriptCommand, {
-                showOutput: false,
-                handleExecutionErrors: true
-            });
-            
-            // Restore original profile and preset after completion
-            await restore();
+                await context.executeSlashCommandsWithOptions(stscriptCommand, {
+                    showOutput: false,
+                    handleExecutionErrors: true
+                });
+            }
         } catch (error) {
             console.error(`${extensionName}: Error executing fun prompt script:`, error);
-            
-            // Restore original profile and preset on error
-            await restore();
         }
     }
 

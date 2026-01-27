@@ -30,8 +30,7 @@ const EDIT_INTROS_OPTIONS = {
     'they-them': 'Rewrite the intro changing all references to {{user}} to use they/them pronouns.'
 };
 
-import { generateNewSwipe } from '../guidedSwipe.js';
-import { extensionName, getContext, extension_settings, handleSwitching, debugLog } from '../persistentGuides/guideExports.js'; // Import from central hub
+import { extensionName, getContext, extension_settings, debugLog, requestCompletion, shouldUseDirectCall } from '../persistentGuides/guideExports.js'; // Import from central hub
 
 // Class to handle the popup functionality
 export class EditIntrosPopup {
@@ -377,82 +376,49 @@ export class EditIntrosPopup {
         const textareaElement = document.getElementById('send_textarea');
         const customEdit = textareaElement ? textareaElement.value.trim() : '';
 
-        // --- Construct Script (Existing logic, using the new 'instruction') ---
-        const scriptPart1 = `
-
-            // Editing Intro messages |
-            /sys at=0 Editing Intro messages | 
-            /hide 0 |
-
-            // Set the instruction |
-            /setvar key=inp "${instruction.replace(/"/g, '\\"')}" |
-
-            // Rewrite the intro |
-            /inject id=msgtorework position=chat ephemeral=true scan=true depth=0 role=assistant {{lastMessage}}|
-            /inject id=instruct position=chat ephemeral=true scan=true depth=0 [Write msgtorework again but correct it to reflect the following: {{getvar::inp}}. Don't cut the message or make changes besides that.] | `;
-
-        const scriptPart2 = `/cut 0|`;
-
-        // --- Preset Switching Logic using PresetManager ---
         const introPresetSettingKey = 'presetEditIntros';
         const presetValue = extension_settings[extensionName]?.[introPresetSettingKey] ?? '';
-        
-        // Get the switch and restore functions from the utility (same as runGuide.js)
-        let originalProfile = null;
-        try {
-            // Get current profile before any switching
-            const { getCurrentProfile } = await import('../persistentGuides/guideExports.js');
-            originalProfile = await getCurrentProfile();
-            debugLog(`[EditIntros] Captured original profile before switching: "${originalProfile}"`);
-        } catch (error) {
-            debugLog(`[EditIntros] Could not get original profile:`, error);
-        }
+        const profileValue = extension_settings[extensionName]?.profileEditIntros ?? '';
 
-        const presetHandler = await handleSwitching(originalProfile, presetValue, originalProfile);
-        const { switch: switchPreset, restore } = presetHandler;
-
-        // --- Execute Script (Updated logic) ---
         try {
             const context = getContext();
-            
-            // Switch to the target preset before executing the script (same as runGuide.js)
-            if (presetValue) {
-                // Wait for preset switching to complete using the utility function
-                debugLog(`[EditIntros] Switching to preset "${presetValue}" and waiting for completion...`);
-                await switchPreset();
-                debugLog(`[EditIntros] Preset switch completed successfully`);
+            if (!context || !context.chat || context.chat.length === 0) {
+                console.error('[GuidedGenerations] No intro message available to edit.');
+                return;
             }
-            
-            // Execute the script with the new preset
-            await context.executeSlashCommandsWithOptions(scriptPart1, { showOutput: false });
-            const swipeSuccess = await generateNewSwipe();
-            if (swipeSuccess) {
-                // Wait a short moment before executing the final part
-                await new Promise(resolve => setTimeout(resolve, 3000)); 
-                await context.executeSlashCommandsWithOptions(scriptPart2, { showOutput: false });
+
+            const messageToRewrite = context.chat[0]?.mes || '';
+            const promptForModel = `Rewrite the intro to reflect the following adjustments: ${instruction}\n\nOriginal intro:\n${messageToRewrite}`;
+
+            const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
+            let updatedIntro = '';
+            if (useDirectCall) {
+                debugLog('[EditIntros] Requesting direct completion for intro edit...');
+                updatedIntro = await requestCompletion({
+                    profileName: profileValue,
+                    presetName: presetValue,
+                    prompt: promptForModel,
+                    debugLabel: 'editIntros:edit',
+                    includeChatHistory: false,
+                });
+            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptForModel}`, {
+                    showOutput: false,
+                    handleExecutionErrors: true,
+                });
+                updatedIntro = result?.pipe || '';
             } else {
-                console.error('[GuidedGenerations] Failed to generate new swipe.');
+                console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
             }
-            
-            // Restore original profile/preset if we switched (same as runGuide.js)
-            if (presetValue) {
-                debugLog(`[EditIntros] Restoring original profile/preset...`);
-                await restore();
-                debugLog(`[EditIntros] Profile/preset restore completed`);
+
+            if (!updatedIntro || updatedIntro.trim() === '') {
+                console.error('[GuidedGenerations] No updated intro text received.');
+                return;
             }
+
+            await applyIntroUpdate(context, updatedIntro);
         } catch (error) {
-            console.error('[GuidedGenerations] Error executing Edit Intros script:', error);
-            
-            // Restore original profile/preset on error (same as runGuide.js)
-            if (presetValue) {
-                try {
-                    debugLog(`[EditIntros] Restoring original profile/preset on error...`);
-                    await restore();
-                    debugLog(`[EditIntros] Profile/preset restore completed on error`);
-                } catch (restoreError) {
-                    console.error(`${extensionName}: Error restoring original profile/preset on error:`, restoreError);
-                }
-            }
+            console.error('[GuidedGenerations] Error executing Edit Intros request:', error);
         }
 
         if (customEdit && textareaElement) {
@@ -496,75 +462,120 @@ export class EditIntrosPopup {
         // Close the popup immediately now that validation has passed
         this.close();
 
-        // --- Construct Modified Script (Existing logic, using new 'instruction') ---
-        const scriptPart1 = `
-            // Making New Intro message |
-            /sys at=0 Making New Intro message |
+        const introPresetSettingKey = 'presetEditIntros';
+        const presetValue = extension_settings[extensionName]?.[introPresetSettingKey] ?? '';
+        const profileValue = extension_settings[extensionName]?.profileEditIntros ?? '';
 
-            // Set the instruction |
-            /setvar key=inp "${instruction.replace(/"/g, '\\"')}" |
-
-            // Generate the new intro |
-            /inject id=newIntro position=chat ephemeral=true scan=true depth=0 [Write the intro based on the following description: {{getvar::inp}}] | `;
-        const scriptPart2 = `/cut 0|`;
-
-        // --- Preset Switching Logic ---
-        const introPresetSettingKey = 'presetEditIntros'; // CORRECTED: Setting key for the Edit Intros preset
-        const targetPresetNameRaw = extension_settings[extensionName]?.[introPresetSettingKey] ?? '';
-        const targetPresetName = targetPresetNameRaw.trim();
-
-        let presetSwitchStart = '';
-        let presetSwitchEnd = '';
-
-        if (targetPresetName) { // Only switch if a target preset name is configured and not empty
-            presetSwitchStart = `
-// Get the currently active preset|
-/preset|
-/setvar key=currentPreset {{pipe}} |
-+
-// If current preset is already ${targetPresetName}, do NOT overwrite oldPreset|
-/if left={{getvar::currentPreset}} rule=neq right="${targetPresetName}" {: 
-   // Store the current preset in oldPreset|
-   /setvar key=oldPreset {{getvar::currentPreset}} |
-   // Now switch to ${targetPresetName}|
-   /preset ${targetPresetName} |
-:}| 
-`;
-            presetSwitchEnd = `
-// Switch back to the original preset if it was stored|
-/preset {{getvar::oldPreset}} |
-`;
-        } else {
-            presetSwitchStart = `// No preset configured for Edit Intros or preset switching disabled.|`;
-            presetSwitchEnd = `// No preset configured for Edit Intros or preset switching disabled.|`;
-        }
-
-        // --- Execute Script (Existing logic) ---
         try {
             const context = getContext();
-            // Debug: log outgoing Make New Intro script for clarity
-            await context.executeSlashCommandsWithOptions(presetSwitchStart + '\n' + scriptPart1, { showOutput: false });
-            // Wait a short moment *after* initial commands before generating
-            await new Promise(resolve => setTimeout(resolve, 300)); 
-            const swipeSuccess = await generateNewSwipe();
-            if (swipeSuccess) {
-                // Wait a short moment before switching preset back
-                await new Promise(resolve => setTimeout(resolve, 300)); 
-                // Only need to switch preset back
-                await context.executeSlashCommandsWithOptions(scriptPart2 + '\n' + presetSwitchEnd, { showOutput: false });
-            } else {
-                console.error('[GuidedGenerations] Failed to generate new swipe for Make New Intro.');
-                // Still switch back preset on failure?
-                 await context.executeSlashCommandsWithOptions(scriptPart2 + '\n' + presetSwitchEnd, { showOutput: false });
+            if (!context) {
+                console.error('[GuidedGenerations] Context unavailable for intro generation.');
+                return;
             }
+
+            const promptForModel = `Write the intro based on the following description: ${instruction}`;
+            const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
+            let newIntro = '';
+            if (useDirectCall) {
+                debugLog('[EditIntros] Requesting direct completion for new intro...');
+                newIntro = await requestCompletion({
+                    profileName: profileValue,
+                    presetName: presetValue,
+                    prompt: promptForModel,
+                    debugLabel: 'editIntros:new',
+                    includeChatHistory: false,
+                });
+            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptForModel}`, {
+                    showOutput: false,
+                    handleExecutionErrors: true,
+                });
+                newIntro = result?.pipe || '';
+            } else {
+                console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
+            }
+
+            if (!newIntro || newIntro.trim() === '') {
+                console.error('[GuidedGenerations] No new intro text received.');
+                return;
+            }
+
+            await applyIntroUpdate(context, newIntro);
         } catch (error) {
-            console.error('[GuidedGenerations] Error executing Make New Intro script:', error);
-            // Ensure preset is switched back even on error
-             await context.executeSlashCommandsWithOptions(scriptPart2 + '\n' + presetSwitchEnd, { showOutput: false });
+            console.error('[GuidedGenerations] Error executing Make New Intro request:', error);
         }
     }
 
 }
+
+async function applyIntroUpdate(context, introText) {
+    const targetIndex = context?.chat?.length ? 0 : -1;
+    const characterName = context?.characters?.[context.characterId]?.name || 'Assistant';
+
+    if (targetIndex === -1) {
+        const message = {
+            name: characterName,
+            is_user: false,
+            is_system: false,
+            send_date: Date.now(),
+            mes: introText,
+            force_avatar: null,
+            extra: {
+                type: 'intro',
+                gen_id: Date.now(),
+            },
+        };
+        context.chat.push(message);
+        await context.eventSource.emit('MESSAGE_SENT', context.chat.length - 1);
+        if (typeof context.addOneMessage === 'function') {
+            await context.addOneMessage(message);
+        }
+        await context.eventSource.emit('USER_MESSAGE_RENDERED', context.chat.length - 1);
+        if (typeof context.saveChat === 'function') {
+            await context.saveChat();
+        }
+        return;
+    }
+
+    const messageData = context.chat[targetIndex];
+    if (!messageData) {
+        console.error('[GuidedGenerations] Could not find intro message to update.');
+        return;
+    }
+
+    if (!Array.isArray(messageData.swipes)) {
+        messageData.swipes = [messageData.mes];
+    }
+    messageData.swipes.push(introText);
+    messageData.swipe_id = messageData.swipes.length - 1;
+    messageData.mes = introText;
+
+    const mesDom = document.querySelector(`#chat .mes[mesid="${targetIndex}"]`);
+    if (mesDom && typeof context.messageFormatting === 'function') {
+        const mesTextElement = mesDom.querySelector('.mes_text');
+        if (mesTextElement) {
+            mesTextElement.innerHTML = context.messageFormatting(
+                messageData.mes,
+                messageData.name,
+                messageData.is_system,
+                messageData.is_user,
+                targetIndex
+            );
+        }
+        [...mesDom.querySelectorAll('.swipes-counter')].forEach((it) => {
+            it.textContent = `${messageData.swipe_id + 1}/${messageData.swipes.length}`;
+        });
+    }
+
+    if (context.eventSource && context.event_types) {
+        context.eventSource.emit(context.event_types.MESSAGE_SWIPED, targetIndex);
+    }
+
+    if (typeof context.saveChat === 'function') {
+        await context.saveChat();
+    }
+}
+
 // Singleton instance
 const editIntrosPopup = new EditIntrosPopup();
 export default editIntrosPopup;
