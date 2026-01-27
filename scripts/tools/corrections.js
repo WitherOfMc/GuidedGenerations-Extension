@@ -1,7 +1,355 @@
 /**
  * @file Contains the logic for the Corrections tool.
  */
-import { getContext, extension_settings, extensionName, debugLog, setPreviousImpersonateInput, requestCompletion, shouldUseDirectCall } from '../persistentGuides/guideExports.js';
+import {
+    getContext,
+    extension_settings,
+    extensionName,
+    debugLog,
+    requestCompletion,
+    shouldUseDirectCall,
+    getProfileApiType,
+    extractApiIdFromApiType
+} from '../persistentGuides/guideExports.js';
+
+let lastCorrectionInstruction = '';
+const TEXT_API_IDS = new Set([
+    'textgenerationwebui',
+    'kobold',
+    'koboldhorde',
+    'novel',
+    'novelai',
+    'textgen',
+    'text',
+    'llamacpp',
+]);
+
+function resolveProfileByNameOrId(profileName, profiles = []) {
+    if (!profileName) return null;
+    return profiles.find((profile) => profile?.name === profileName || profile?.id === profileName) || null;
+}
+
+function resolveCompletionMode(profile, apiType, apiId) {
+    const rawMode = profile?.mode ? String(profile.mode).toLowerCase() : '';
+    if (rawMode.includes('text')) return 'text';
+    if (rawMode.includes('chat')) return 'chat';
+
+    const typeKey = (apiId || apiType || '').toLowerCase();
+    if (TEXT_API_IDS.has(typeKey)) return 'text';
+    return 'chat';
+}
+
+function buildChatHistoryBlock(chat = []) {
+    return chat.map((message, index) => {
+        const role = message?.is_system ? 'system' : message?.is_user ? 'user' : 'assistant';
+        const name = message?.name ? ` ${message.name}` : '';
+        const content = message?.mes || '';
+        return `[${index + 1}] ${role}${name}: ${content}`;
+    }).join('\n\n');
+}
+
+class CorrectionsPopup {
+    constructor() {
+        this.popupId = 'correctionsPopup';
+        this.popupElement = null;
+        this.initialized = false;
+        this.messageIndex = null;
+        this.swipeIndex = null;
+        this.includeChatHistory = true;
+    }
+
+    async init(parentElement = document.body) {
+        if (this.initialized) return;
+
+        const existing = document.getElementById(this.popupId);
+        if (!existing) {
+            const popupHtml = `
+                <div id="${this.popupId}" class="gg-popup" style="display: none;">
+                    <div class="gg-popup-content gg-corrections-popup-content">
+                        <div class="gg-popup-header">
+                            <h2>Corrections</h2>
+                            <span class="gg-popup-close">&times;</span>
+                        </div>
+                        <div class="gg-popup-body">
+                            <div class="gg-popup-section gg-corrections-nav">
+                                <div class="gg-corrections-nav-row">
+                                    <button type="button" id="ggCorrectionsPrevMessage" class="gg-button gg-button-secondary">Older</button>
+                                    <div id="ggCorrectionsMessageInfo" class="gg-corrections-info">Message</div>
+                                    <button type="button" id="ggCorrectionsNextMessage" class="gg-button gg-button-secondary">Newer</button>
+                                </div>
+                                <div class="gg-corrections-nav-row">
+                                    <button type="button" id="ggCorrectionsPrevSwipe" class="gg-button gg-button-secondary">Prev Swipe</button>
+                                    <div id="ggCorrectionsSwipeInfo" class="gg-corrections-info">Swipe</div>
+                                    <button type="button" id="ggCorrectionsNextSwipe" class="gg-button gg-button-secondary">Next Swipe</button>
+                                </div>
+                            </div>
+                            <div class="gg-popup-section">
+                                <label for="ggCorrectionsMessage">Selected Message:</label>
+                                <textarea id="ggCorrectionsMessage" rows="10" readonly></textarea>
+                                <p class="gg-popup-note">Tip: highlight any part of this message to only edit the selection.</p>
+                            </div>
+                            <div class="gg-popup-section">
+                                <label for="ggCorrectionsInstruction">Correction Instructions:</label>
+                                <textarea id="ggCorrectionsInstruction" rows="4" placeholder="Describe what should be changed..."></textarea>
+                            </div>
+                            <div class="gg-popup-section gg-setting-inline">
+                                <input id="ggCorrectionsIncludeHistory" type="checkbox" checked>
+                                <label for="ggCorrectionsIncludeHistory">Include chat history with the request</label>
+                            </div>
+                            <div class="gg-popup-section gg-popup-note">
+                                When selecting text, the model will only rewrite the highlighted part. If nothing is selected, the entire message is rewritten.
+                            </div>
+                        </div>
+                        <div class="gg-popup-footer">
+                            <button type="button" id="ggCorrectionsApply" class="gg-button gg-button-primary">Apply Correction</button>
+                            <button type="button" id="ggCorrectionsCancel" class="gg-button gg-button-secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            parentElement.insertAdjacentHTML('beforeend', popupHtml);
+        }
+
+        this.popupElement = document.getElementById(this.popupId);
+        if (!this.popupElement) {
+            console.error('[GuidedGenerations][Corrections] Failed to create popup element.');
+            return;
+        }
+
+        this.setupEventListeners();
+        this.initialized = true;
+    }
+
+    setupEventListeners() {
+        if (!this.popupElement) return;
+
+        const closeButton = this.popupElement.querySelector('.gg-popup-close');
+        const cancelButton = this.popupElement.querySelector('#ggCorrectionsCancel');
+        const applyButton = this.popupElement.querySelector('#ggCorrectionsApply');
+        const prevMessageButton = this.popupElement.querySelector('#ggCorrectionsPrevMessage');
+        const nextMessageButton = this.popupElement.querySelector('#ggCorrectionsNextMessage');
+        const prevSwipeButton = this.popupElement.querySelector('#ggCorrectionsPrevSwipe');
+        const nextSwipeButton = this.popupElement.querySelector('#ggCorrectionsNextSwipe');
+        const includeHistoryCheckbox = this.popupElement.querySelector('#ggCorrectionsIncludeHistory');
+
+        closeButton?.addEventListener('click', () => this.close());
+        cancelButton?.addEventListener('click', () => this.close());
+        applyButton?.addEventListener('click', () => this.applyCorrection());
+
+        prevMessageButton?.addEventListener('click', () => this.changeMessage(-1));
+        nextMessageButton?.addEventListener('click', () => this.changeMessage(1));
+        prevSwipeButton?.addEventListener('click', () => this.changeSwipe(-1));
+        nextSwipeButton?.addEventListener('click', () => this.changeSwipe(1));
+
+        includeHistoryCheckbox?.addEventListener('change', (event) => {
+            this.includeChatHistory = !!event.target.checked;
+        });
+    }
+
+    open() {
+        if (!this.initialized) {
+            console.error('[GuidedGenerations][Corrections] Popup not initialized.');
+            return;
+        }
+
+        const context = getContext();
+        if (!context || !Array.isArray(context.chat) || context.chat.length === 0) {
+            alert('No chat messages available to correct.');
+            return;
+        }
+
+        this.messageIndex = context.chat.length - 1;
+        this.swipeIndex = this._getDefaultSwipeIndex(context.chat[this.messageIndex]);
+
+        const instructionTextarea = this.popupElement.querySelector('#ggCorrectionsInstruction');
+        if (instructionTextarea) {
+            instructionTextarea.value = lastCorrectionInstruction;
+        }
+
+        const includeHistoryCheckbox = this.popupElement.querySelector('#ggCorrectionsIncludeHistory');
+        if (includeHistoryCheckbox) {
+            includeHistoryCheckbox.checked = true;
+            this.includeChatHistory = true;
+        }
+
+        this.updateMessageDisplay();
+        this.popupElement.style.display = 'block';
+        document.body.classList.add('gg-popup-open');
+    }
+
+    close() {
+        if (this.popupElement) {
+            this.popupElement.style.display = 'none';
+            document.body.classList.remove('gg-popup-open');
+        }
+    }
+
+    _getDefaultSwipeIndex(messageData) {
+        if (!messageData) return 0;
+        const swipeId = Number.isInteger(messageData.swipe_id) ? messageData.swipe_id : 0;
+        const swipes = this._getSwipesForMessage(messageData);
+        return Math.min(Math.max(swipeId, 0), Math.max(swipes.length - 1, 0));
+    }
+
+    _getSwipesForMessage(messageData) {
+        if (!messageData) return [];
+        if (Array.isArray(messageData.swipes) && messageData.swipes.length > 0) {
+            return messageData.swipes;
+        }
+        return [messageData.mes || ''];
+    }
+
+    changeMessage(direction) {
+        const context = getContext();
+        if (!context || !Array.isArray(context.chat)) return;
+
+        const newIndex = this.messageIndex + direction;
+        if (newIndex < 0 || newIndex >= context.chat.length) return;
+
+        this.messageIndex = newIndex;
+        this.swipeIndex = this._getDefaultSwipeIndex(context.chat[this.messageIndex]);
+        this.updateMessageDisplay();
+    }
+
+    changeSwipe(direction) {
+        const context = getContext();
+        if (!context || !Array.isArray(context.chat)) return;
+
+        const messageData = context.chat[this.messageIndex];
+        const swipes = this._getSwipesForMessage(messageData);
+        const newIndex = this.swipeIndex + direction;
+        if (newIndex < 0 || newIndex >= swipes.length) return;
+
+        this.swipeIndex = newIndex;
+        this.updateMessageDisplay();
+    }
+
+    updateMessageDisplay() {
+        const context = getContext();
+        if (!context || !Array.isArray(context.chat)) return;
+
+        const messageData = context.chat[this.messageIndex];
+        const swipes = this._getSwipesForMessage(messageData);
+        const currentSwipe = swipes[this.swipeIndex] ?? messageData?.mes ?? '';
+
+        const messageTextarea = this.popupElement.querySelector('#ggCorrectionsMessage');
+        const messageInfo = this.popupElement.querySelector('#ggCorrectionsMessageInfo');
+        const swipeInfo = this.popupElement.querySelector('#ggCorrectionsSwipeInfo');
+        const prevMessageButton = this.popupElement.querySelector('#ggCorrectionsPrevMessage');
+        const nextMessageButton = this.popupElement.querySelector('#ggCorrectionsNextMessage');
+        const prevSwipeButton = this.popupElement.querySelector('#ggCorrectionsPrevSwipe');
+        const nextSwipeButton = this.popupElement.querySelector('#ggCorrectionsNextSwipe');
+
+        if (messageTextarea) messageTextarea.value = currentSwipe;
+        if (messageInfo) messageInfo.textContent = `Message ${this.messageIndex + 1}/${context.chat.length}`;
+        if (swipeInfo) swipeInfo.textContent = `Swipe ${this.swipeIndex + 1}/${swipes.length}`;
+
+        if (prevMessageButton) prevMessageButton.disabled = this.messageIndex <= 0;
+        if (nextMessageButton) nextMessageButton.disabled = this.messageIndex >= context.chat.length - 1;
+        if (prevSwipeButton) prevSwipeButton.disabled = this.swipeIndex <= 0;
+        if (nextSwipeButton) nextSwipeButton.disabled = this.swipeIndex >= swipes.length - 1;
+    }
+
+    async applyCorrection() {
+        const context = getContext();
+        if (!context || !Array.isArray(context.chat)) {
+            console.error('[GuidedGenerations][Corrections] No chat context available.');
+            return;
+        }
+
+        const instructionTextarea = this.popupElement.querySelector('#ggCorrectionsInstruction');
+        const messageTextarea = this.popupElement.querySelector('#ggCorrectionsMessage');
+
+        const instruction = instructionTextarea?.value?.trim() || '';
+        if (!instruction) {
+            alert('Please provide correction instructions.');
+            return;
+        }
+
+        lastCorrectionInstruction = instruction;
+
+        const messageData = context.chat[this.messageIndex];
+        if (!messageData) {
+            console.error('[GuidedGenerations][Corrections] Selected message not found.');
+            return;
+        }
+
+        const swipes = this._getSwipesForMessage(messageData);
+        const baseMessage = swipes[this.swipeIndex] ?? messageData.mes ?? '';
+        const selectionStart = messageTextarea?.selectionStart ?? 0;
+        const selectionEnd = messageTextarea?.selectionEnd ?? 0;
+        const hasSelection = selectionEnd > selectionStart;
+        const selectedText = hasSelection ? baseMessage.slice(selectionStart, selectionEnd) : '';
+
+        const promptTemplate = extension_settings[extensionName]?.promptCorrections ?? '';
+        const filledPrompt = promptTemplate.replace('{{input}}', instruction);
+
+        const profiles = context?.extensionSettings?.connectionManager?.profiles || [];
+        const selectedProfileId = context?.extensionSettings?.connectionManager?.selectedProfile || '';
+        let profile = resolveProfileByNameOrId(profileValue, profiles);
+        if (!profile && selectedProfileId) {
+            profile = profiles.find((entry) => entry?.id === selectedProfileId) || null;
+        }
+        const resolvedProfileName = profile?.name || profileValue || selectedProfileId || '';
+        const apiType = profile?.api || (await getProfileApiType(resolvedProfileName));
+        const apiId = extractApiIdFromApiType(apiType) || apiType;
+        const completionMode = resolveCompletionMode(profile, apiType, apiId);
+        const historyBlock = (this.includeChatHistory && completionMode === 'text')
+            ? buildChatHistoryBlock(context.chat || [])
+            : '';
+
+        const promptForModel = hasSelection
+            ? `${filledPrompt}${historyBlock ? `\n\nChat history:\n${historyBlock}` : ''}\n\nFull message:\n${baseMessage}\n\nSelected text to rewrite (exact):\n${selectedText}\n\nTask: Rewrite ONLY the selected text to satisfy the instructions.\nReturn ONLY the rewritten selected text with no labels, no quotes, no code fences, and no extra commentary. The output must be ready to replace the selected text verbatim.`
+            : `${filledPrompt}${historyBlock ? `\n\nChat history:\n${historyBlock}` : ''}\n\nFull message to rewrite:\n${baseMessage}\n\nTask: Rewrite the full message to satisfy the instructions.\nReturn ONLY the rewritten full message with no labels, no quotes, no code fences, and no extra commentary.`;
+
+        const profileKey = 'profileCorrections';
+        const presetKey = 'presetCorrections';
+        const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
+        const targetPreset = extension_settings[extensionName]?.[presetKey] ?? '';
+        debugLog(`[GuidedGenerations][Corrections] Using profile: ${profileValue || 'current'}, preset: ${targetPreset || 'none'}`);
+
+        try {
+            const useDirectCall = await shouldUseDirectCall(profileValue, targetPreset);
+            let correctedText = '';
+
+            if (useDirectCall) {
+                correctedText = await requestCompletion({
+                    profileName: profileValue,
+                    presetName: targetPreset,
+                    prompt: promptForModel,
+                    debugLabel: 'corrections',
+                    includeChatHistory: this.includeChatHistory,
+                });
+            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                const command = this.includeChatHistory ? '/gen' : '/genraw';
+                const result = await context.executeSlashCommandsWithOptions(`${command} ${promptForModel}`, {
+                    showOutput: false,
+                    handleExecutionErrors: true,
+                });
+                correctedText = result?.pipe || '';
+            } else {
+                console.error('[GuidedGenerations][Corrections] context.executeSlashCommandsWithOptions not found.');
+            }
+
+            if (!correctedText || correctedText.trim() === '') {
+                console.error('[GuidedGenerations][Corrections] No corrected text received.');
+                return;
+            }
+
+            const updatedMessage = hasSelection
+                ? `${baseMessage.slice(0, selectionStart)}${correctedText}${baseMessage.slice(selectionEnd)}`
+                : correctedText;
+
+            await applyCorrectionSwipe(context, this.messageIndex, updatedMessage);
+            this.close();
+        } catch (error) {
+            console.error('[GuidedGenerations][Corrections] Error during Corrections apply:', error);
+            alert(`Corrections Tool Error: ${error.message || 'An unexpected error occurred.'}`);
+        }
+    }
+}
+
+const correctionsPopup = new CorrectionsPopup();
 
 /**
  * Provides a tool to modify the last message based on user's instructions
@@ -10,83 +358,20 @@ import { getContext, extension_settings, extensionName, debugLog, setPreviousImp
  */
 export default async function corrections() {
     debugLog('[GuidedGenerations][Corrections] Tool activated.');
-    const textarea = document.getElementById('send_textarea');
-    if (!textarea) {
-        console.error('[GuidedGenerations][Corrections] Textarea #send_textarea not found.');
-        return;
+    if (!correctionsPopup.initialized) {
+        await correctionsPopup.init();
     }
-    const originalInput = textarea.value; // Get current input
-
-    // Save the input state using the shared function
-    setPreviousImpersonateInput(originalInput);
-    debugLog(`[GuidedGenerations][Corrections] Original input saved: "${originalInput}"`);
-
-    // Use user-defined corrections prompt override
-    const promptTemplate = extension_settings[extensionName]?.promptCorrections ?? '';
-    const filledPrompt = promptTemplate.replace('{{input}}', originalInput);
-
-    // Determine target profile and preset from settings
-    const profileKey = 'profileCorrections';
-    const presetKey = 'presetCorrections';
-    const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
-    const targetPreset = extension_settings[extensionName]?.[presetKey] ?? '';
-    debugLog(`[GuidedGenerations][Corrections] Using profile: ${profileValue || 'current'}, preset: ${targetPreset || 'none'}`);
-    const context = getContext();
-    
-    try {
-        if (!context || !context.chat || context.chat.length === 0) {
-            console.error('[GuidedGenerations][Corrections] No chat messages available to correct.');
-            return;
-        }
-
-        const lastMessage = context.chat[context.chat.length - 1];
-        const messageToRewrite = lastMessage?.mes || '';
-        const promptForModel = `${filledPrompt}\n\nMessage to rewrite:\n${messageToRewrite}`;
-
-        const useDirectCall = await shouldUseDirectCall(profileValue, targetPreset);
-        let correctedText = '';
-        if (useDirectCall) {
-            debugLog('[GuidedGenerations][Corrections] Requesting direct completion...');
-            correctedText = await requestCompletion({
-                profileName: profileValue,
-                presetName: targetPreset,
-                prompt: promptForModel,
-                debugLabel: 'corrections',
-                includeChatHistory: false,
-            });
-        } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-            const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptForModel}`, {
-                showOutput: false,
-                handleExecutionErrors: true,
-            });
-            correctedText = result?.pipe || '';
-        } else {
-            console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
-        }
-
-        if (!correctedText || correctedText.trim() === '') {
-            console.error('[GuidedGenerations][Corrections] No corrected text received.');
-            return;
-        }
-
-        await applyCorrectionSwipe(context, correctedText);
-    } catch (error) {
-        console.error("[GuidedGenerations][Corrections] Error during Corrections tool execution:", error);
-        alert(`Corrections Tool Error: ${error.message || 'An unexpected error occurred.'}`);
-    } finally {
-        debugLog('[GuidedGenerations][Corrections] Corrections tool finished.');
-    }
+    correctionsPopup.open();
 }
 
 /**
  * Helper function to execute ST-Script commands
  * @param {string} stscript - The ST-Script command to execute
  */
-async function applyCorrectionSwipe(context, correctedText) {
-    const messageIndex = context.chat.length - 1;
+async function applyCorrectionSwipe(context, messageIndex, correctedText) {
     const messageData = context.chat[messageIndex];
     if (!messageData) {
-        console.error('[GuidedGenerations][Corrections] Could not find last message to update.');
+        console.error('[GuidedGenerations][Corrections] Could not find selected message to update.');
         return;
     }
 

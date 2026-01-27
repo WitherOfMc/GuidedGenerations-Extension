@@ -344,6 +344,12 @@
     margin-bottom: 15px; /* Space between sections */
 }
 
+.gg-popup-note {
+    font-size: 0.9em;
+    opacity: 0.9;
+    margin-top: 6px;
+}
+
 .gg-popup-section h3 {
     margin-bottom: 8px; /* Space below heading */
     margin-top: 0; /* Remove default top margin */
@@ -426,6 +432,28 @@
 
 .gg-popup-footer .gg-button {
     min-width: 100px; /* Adjust as needed */
+}
+
+.gg-corrections-popup-content {
+    max-width: 800px;
+}
+
+.gg-corrections-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.gg-corrections-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.gg-corrections-info {
+    flex: 1;
+    text-align: center;
+    font-weight: 500;
 }
 
 .gg-button {
