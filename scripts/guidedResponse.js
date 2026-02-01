@@ -98,11 +98,16 @@ const guidedResponse = async () => {
                 const selectedCharacter = typeof selectionResult?.pipe === 'string' ? selectionResult.pipe.trim() : '';
 
                 if (selectedCharacter) {
-                    const safeSelection = JSON.stringify(selectedCharacter);
+                    const selectedIndex = groupCharacterNames.findIndex(name => name === selectedCharacter);
+                    const shouldUseIndex = /^\d/.test(selectedCharacter) && selectedIndex >= 0;
+                    const triggerArg = shouldUseIndex ? String(selectedIndex) : JSON.stringify(selectedCharacter);
+                    if (shouldUseIndex) {
+                        debugLog(`[Response] Using group member index ${selectedIndex} for numeric-prefixed name.`);
+                    }
                     stscriptCommand =
                         `// Group chat logic (JS selection, safe trigger)|
 /inject id=instruct position=chat ephemeral=true scan=true depth=${depth} role=${injectionRole} ${filledPrompt}|
-/trigger await=true ${safeSelection}|
+/trigger await=true ${triggerArg}|
 `;
                 } else {
                     debugLog('[Response] Group selection cancelled; aborting guided response.');

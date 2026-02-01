@@ -265,13 +265,14 @@ export class FunPopup {
                 let stscriptCommand = '';
                 if (context.groupId) {
                     let characterListJson = '[]';
+                    let characterNames = [];
                     let selectedCharacter = '';
                     try {
                         const groups = context.groups || [];
                         const currentGroup = groups.find(group => group.id === context.groupId);
 
                         if (currentGroup && Array.isArray(currentGroup.members)) {
-                            const characterNames = currentGroup.members.map(member => {
+                            characterNames = currentGroup.members.map(member => {
                                 return (typeof member === 'string' && member.toLowerCase().endsWith('.png')) ? member.slice(0, -4) : member;
                             }).filter(Boolean);
 
@@ -294,11 +295,16 @@ export class FunPopup {
                     }
 
                     if (selectedCharacter) {
-                        const safeSelection = JSON.stringify(selectedCharacter);
+                        const selectedIndex = characterNames.findIndex(name => name === selectedCharacter);
+                        const shouldUseIndex = /^\d/.test(selectedCharacter) && selectedIndex >= 0;
+                        const triggerArg = shouldUseIndex ? String(selectedIndex) : JSON.stringify(selectedCharacter);
+                        if (shouldUseIndex) {
+                            debugLog(`[FunPopup] Using group member index ${selectedIndex} for numeric-prefixed name.`);
+                        }
                         stscriptCommand = 
 `// Group chat logic for Fun Prompt|
 /inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
-/trigger await=true ${safeSelection}|
+/trigger await=true ${triggerArg}|
 `;
                     } else {
                         // Cancel group fun prompt when selection is cancelled or invalid
