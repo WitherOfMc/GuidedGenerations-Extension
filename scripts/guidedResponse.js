@@ -32,21 +32,23 @@ const guidedResponse = async () => {
     const filledPrompt = promptTemplate.replace('{{input}}', originalInput);
     const depth = extension_settings[extensionName]?.depthPromptGuidedResponse ?? 0;
 
+    let groupCharacterNames = [];
+    let groupCharacterListJson = '[]';
+    let needsGroupSelection = false;
+
     // Check if it's a group chat using the helper function
     if (isGroupChat()) {
         const context = getContext();
-        let characterListJson = '[]'; // Default to empty JSON array
 
         try {
             const currentGroupId = context?.groupId; // Optional chaining for safety
             const groups = context?.groups;         // Optional chaining for safety
-            let characterNames = [];
 
             if (currentGroupId && groups && Array.isArray(groups)) {
                 const currentGroup = groups.find(group => group.id === currentGroupId);
 
                 if (currentGroup && currentGroup.members && Array.isArray(currentGroup.members)) {
-                    characterNames = currentGroup.members.map(member => {
+                    groupCharacterNames = currentGroup.members.map(member => {
                         // Remove .png from the end of the member name if present
                         if (typeof member === 'string' && member.toLowerCase().endsWith('.png')) {
                             return member.slice(0, -4);
@@ -56,9 +58,10 @@ const guidedResponse = async () => {
                 }
             }
 
-            if (characterNames.length > 0) {
+            if (groupCharacterNames.length > 0) {
                 // Convert the array to a JSON string for the /buttons command
-                characterListJson = JSON.stringify(characterNames);
+                groupCharacterListJson = JSON.stringify(groupCharacterNames);
+                needsGroupSelection = true;
             } else {
                 console.warn(`[${extensionName}][Response] Processed group members resulted in empty list or group not found.`);
             }
@@ -66,16 +69,7 @@ const guidedResponse = async () => {
             console.error(`[${extensionName}][Response] Error processing group members from context:`, error);
         }
 
-        if (characterListJson !== '[]') {
-            // Pass the generated JSON string to the labels parameter
-            stscriptCommand = 
-                `// Group chat logic (JS handled selection list via context)|
-/buttons labels=${characterListJson} "Select member to respond as" |
-/setglobalvar key=selection {{pipe}} |
-/inject id=instruct position=chat ephemeral=true scan=true depth=${depth} role=${injectionRole} ${filledPrompt} |
-/trigger await=true {{getglobalvar::selection}}|
-`;
-        } else {
+        if (!needsGroupSelection) {
             console.warn(`[${extensionName}][Response] Could not get character list for group chat selection. Falling back to single character logic.`);
             // Fallback to single character logic if character list is empty or invalid
             stscriptCommand = 
@@ -96,6 +90,26 @@ const guidedResponse = async () => {
     if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
         const context = SillyTavern.getContext();
         try {
+            if (needsGroupSelection && groupCharacterListJson !== '[]') {
+                const selectionResult = await context.executeSlashCommandsWithOptions(
+                    `/buttons labels=${groupCharacterListJson} "Select member to respond as"`,
+                    { showOutput: false, handleExecutionErrors: true }
+                );
+                const selectedCharacter = typeof selectionResult?.pipe === 'string' ? selectionResult.pipe.trim() : '';
+
+                if (selectedCharacter) {
+                    const safeSelection = JSON.stringify(selectedCharacter);
+                    stscriptCommand =
+                        `// Group chat logic (JS selection, safe trigger)|
+/inject id=instruct position=chat ephemeral=true scan=true depth=${depth} role=${injectionRole} ${filledPrompt}|
+/trigger await=true ${safeSelection}|
+`;
+                } else {
+                    debugLog('[Response] Group selection cancelled; aborting guided response.');
+                    return;
+                }
+            }
+
             // Execute the main command
             await context.executeSlashCommandsWithOptions(stscriptCommand);
 

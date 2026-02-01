@@ -254,6 +254,7 @@ export class FunPopup {
                 let stscriptCommand = '';
                 if (context.groupId) {
                     let characterListJson = '[]';
+                    let selectedCharacter = '';
                     try {
                         const groups = context.groups || [];
                         const currentGroup = groups.find(group => group.id === context.groupId);
@@ -272,19 +273,26 @@ export class FunPopup {
                     }
 
                     if (characterListJson !== '[]') {
+                        const selectionResult = await context.executeSlashCommandsWithOptions(
+                            `/buttons labels=${characterListJson} "Select character to respond"`,
+                            { showOutput: false, handleExecutionErrors: true }
+                        );
+                        if (selectionResult?.pipe) {
+                            selectedCharacter = String(selectionResult.pipe).trim();
+                        }
+                    }
+
+                    if (selectedCharacter) {
+                        const safeSelection = JSON.stringify(selectedCharacter);
                         stscriptCommand = 
 `// Group chat logic for Fun Prompt|
-/buttons labels=${characterListJson} "Select character to respond"|
-/setglobalvar key=selection {{pipe}}|
 /inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
-/trigger await=true {{getglobalvar::selection}}|
+/trigger await=true ${safeSelection}|
 `;
                     } else {
-                        // Fallback for group chat if members can't be found
-                        stscriptCommand = `// Fallback logic for Fun Prompt|
-/inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt}In addition, make sure to take the following into consideration: {{input}}]|
-/trigger await=true|
-`;
+                        // Cancel group fun prompt when selection is cancelled or invalid
+                        debugLog('[FunPopup] Group selection cancelled; aborting fun prompt.');
+                        return;
                     }
                 } else {
                     // Single character logic
