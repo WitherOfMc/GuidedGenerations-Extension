@@ -1315,14 +1315,14 @@ function integrateQRBar() {
         // QR Bar or our container doesn't exist yet, will keep checking or log error
         if (!qrBar) return false; // Keep polling if QR bar not found
         if (!qrContainer) {
-            console.log(`${extensionName}: QR container (gg-qr-container) not found. This shouldn't happen.`);
+            debugWarn(`${extensionName}: QR container (gg-qr-container) not found. This shouldn't happen.`);
             return false;
         }
     }
 
     const currentSettings = extension_settings[extensionName];
     if (!currentSettings) {
-        console.log(`${extensionName}: Extension settings not found.`);
+        debugWarn(`${extensionName}: Extension settings not found.`);
         return false; // Cannot determine integration preference
     }
 
@@ -1353,7 +1353,7 @@ function integrateQRBar() {
                     return false;
                 }
             } else {
-                console.warn(`${extensionName}: Could not find 'send_form' to move QR bar back.`);
+                debugWarn(`${extensionName}: Could not find 'send_form' to move QR bar back.`);
                 // If send_form doesn't exist, we can't reliably move it back. 
                 // Leaving it in qrContainer might be the lesser evil than orphaning it.
                 // Or, we could try qrContainer.removeChild(qrBar) but this needs a defined destination.
