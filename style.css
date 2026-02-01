@@ -319,6 +319,25 @@
     margin-bottom: 15px;
 }
 
+.gg-popup-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.gg-popup-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.95em;
+    cursor: pointer;
+    user-select: none;
+}
+
+.gg-popup-checkbox input {
+    margin: 0;
+}
+
 .gg-popup-header h2 {
     margin: 0;
     font-size: 1.5em;

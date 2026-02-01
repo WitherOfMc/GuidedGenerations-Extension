@@ -82,7 +82,13 @@ export class FunPopup {
                     <div class="gg-popup-content">
                         <div class="gg-popup-header">
                             <h2>Fun Prompts</h2>
-                            <span class="gg-popup-close">&times;</span>
+                            <div class="gg-popup-header-actions">
+                                <label class="gg-popup-checkbox">
+                                    <input type="checkbox" id="ggFunPromptSwipeToggle">
+                                    Swipe
+                                </label>
+                                <span class="gg-popup-close">&times;</span>
+                            </div>
                         </div>
                         <div class="gg-popup-body">
                             <div class="gg-popup-section">
@@ -145,6 +151,11 @@ export class FunPopup {
 
         // Close the popup immediately and execute the prompt in the background
         this.close();
+        if (this._isSwipeEnabled()) {
+            await this._executePromptAsSwipe(funPrompt.prompt);
+            return;
+        }
+
         await this._executePrompt(funPrompt.prompt);
     }
 
@@ -313,6 +324,137 @@ export class FunPopup {
     }
 
     /**
+     * Executes a prompt as a swipe (new variation on last assistant message).
+     * @param {string} promptText - The prompt to execute as a swipe.
+     */
+    async _executePromptAsSwipe(promptText) {
+        const context = getContext();
+        if (!context || typeof context.executeSlashCommandsWithOptions !== 'function') {
+            console.error(`${extensionName}: Context unavailable to execute fun prompt swipe.`);
+            return;
+        }
+
+        const profileKey = 'profileFun';
+        const presetKey = 'presetFun';
+        const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
+        const presetValue = extension_settings[extensionName]?.[presetKey] ?? '';
+        debugLog(`${extensionName}: Swipe using profile: ${profileValue || 'current'}, preset: ${presetValue || 'none'}`);
+
+        const textarea = document.getElementById('send_textarea');
+        const currentInput = textarea ? textarea.value.trim() : '';
+        const filledPrompt = promptText.replace(/\n/g, '\\n'); // Escape newlines for the script
+        const promptWithInput = `${filledPrompt}In addition, make sure to take the following into consideration: ${currentInput}`;
+
+        try {
+            const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
+            let responseText = '';
+
+            if (useDirectCall) {
+                debugLog('[FunPopup] Requesting direct completion for swipe...');
+                responseText = await requestCompletion({
+                    profileName: profileValue,
+                    presetName: presetValue,
+                    prompt: promptWithInput,
+                    debugLabel: 'funPopup:swipe',
+                    includeChatHistory: true,
+                });
+            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptWithInput}`, {
+                    showOutput: false,
+                    handleExecutionErrors: true,
+                });
+                responseText = result?.pipe || '';
+            } else {
+                console.error(`${extensionName}: context.executeSlashCommandsWithOptions not found for fun prompt swipe.`);
+            }
+
+            if (!responseText || responseText.trim() === '') {
+                debugLog('[FunPopup] No response received for swipe.');
+                return;
+            }
+
+            await this._applySwipeUpdate(context, responseText);
+        } catch (error) {
+            console.error(`${extensionName}: Error executing fun prompt swipe:`, error);
+        }
+    }
+
+    async _applySwipeUpdate(context, responseText) {
+        const chat = Array.isArray(context?.chat) ? context.chat : [];
+        const targetIndex = (() => {
+            for (let i = chat.length - 1; i >= 0; i -= 1) {
+                if (!chat[i]?.is_user) return i;
+            }
+            return -1;
+        })();
+
+        if (targetIndex === -1) {
+            debugLog('[FunPopup] No assistant message found for swipe; adding new message instead.');
+            const fallbackCharacter = (() => {
+                const lastAssistant = [...chat].reverse().find(message => !message?.is_user);
+                return lastAssistant?.name || 'Assistant';
+            })();
+            const message = {
+                name: fallbackCharacter,
+                is_user: false,
+                is_system: false,
+                send_date: Date.now(),
+                mes: responseText,
+                force_avatar: null,
+                extra: {
+                    type: 'funprompt',
+                    gen_id: Date.now(),
+                },
+            };
+            context.chat.push(message);
+            await context.eventSource.emit('MESSAGE_SENT', context.chat.length - 1);
+            if (typeof context.addOneMessage === 'function') {
+                await context.addOneMessage(message);
+            }
+            await context.eventSource.emit('USER_MESSAGE_RENDERED', context.chat.length - 1);
+            if (typeof context.saveChat === 'function') {
+                await context.saveChat();
+            }
+            return;
+        }
+
+        const messageData = context.chat[targetIndex];
+        if (!messageData) return;
+
+        if (!Array.isArray(messageData.swipes)) {
+            messageData.swipes = [messageData.mes];
+        }
+        messageData.swipes.push(responseText);
+        messageData.swipe_id = messageData.swipes.length - 1;
+        messageData.mes = responseText;
+
+        const mesDom = document.querySelector(`#chat .mes[mesid="${targetIndex}"]`);
+        if (mesDom && typeof context.messageFormatting === 'function') {
+            const mesTextElement = mesDom.querySelector('.mes_text');
+            if (mesTextElement) {
+                mesTextElement.innerHTML = context.messageFormatting(
+                    messageData.mes,
+                    messageData.name,
+                    messageData.is_system,
+                    messageData.is_user,
+                    targetIndex
+                );
+            }
+            [...mesDom.querySelectorAll('.swipes-counter')].forEach((it) => {
+                it.textContent = `${messageData.swipe_id + 1}/${messageData.swipes.length}`;
+            });
+        }
+
+        if (context.eventSource && context.event_types) {
+            context.eventSource.emit(context.event_types.MESSAGE_SWIPED, targetIndex);
+        }
+
+        if (typeof context.saveChat === 'function') {
+            await context.saveChat();
+        }
+    }
+
+    /**
      * Open the popup
      */
     async open() {
@@ -332,6 +474,11 @@ export class FunPopup {
             this.popupElement.style.display = 'none';
             document.body.classList.remove('gg-popup-open');
         }
+    }
+
+    _isSwipeEnabled() {
+        const toggle = this.popupElement?.querySelector('#ggFunPromptSwipeToggle');
+        return Boolean(toggle?.checked);
     }
 }
 
