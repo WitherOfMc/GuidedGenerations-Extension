@@ -48,6 +48,15 @@ function buildChatHistoryBlock(chat = []) {
     }).join('\n\n');
 }
 
+function escapeHtml(value = '') {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 class CorrectionsPopup {
     constructor() {
         this.popupId = 'correctionsPopup';
@@ -56,6 +65,8 @@ class CorrectionsPopup {
         this.messageIndex = null;
         this.swipeIndex = null;
         this.includeChatHistory = true;
+        this.selectionStart = null;
+        this.selectionEnd = null;
     }
 
     async init(parentElement = document.body) {
@@ -85,8 +96,12 @@ class CorrectionsPopup {
                             </div>
                             <div class="gg-popup-section">
                                 <label for="ggCorrectionsMessage">Selected Message:</label>
-                                <textarea id="ggCorrectionsMessage" rows="10" readonly></textarea>
+                                <div class="gg-corrections-message-wrap">
+                                    <div id="ggCorrectionsMessageOverlay" class="gg-corrections-message-overlay"></div>
+                                    <textarea id="ggCorrectionsMessage" class="gg-corrections-message" rows="10" readonly></textarea>
+                                </div>
                                 <p class="gg-popup-note">Tip: highlight any part of this message to only edit the selection.</p>
+                                <div id="ggCorrectionsSelectionInfo" class="gg-popup-note">No recorded selection.</div>
                             </div>
                             <div class="gg-popup-section">
                                 <label for="ggCorrectionsInstruction">Correction Instructions:</label>
@@ -131,6 +146,7 @@ class CorrectionsPopup {
         const prevSwipeButton = this.popupElement.querySelector('#ggCorrectionsPrevSwipe');
         const nextSwipeButton = this.popupElement.querySelector('#ggCorrectionsNextSwipe');
         const includeHistoryCheckbox = this.popupElement.querySelector('#ggCorrectionsIncludeHistory');
+        const messageTextarea = this.popupElement.querySelector('#ggCorrectionsMessage');
 
         closeButton?.addEventListener('click', () => this.close());
         cancelButton?.addEventListener('click', () => this.close());
@@ -144,6 +160,15 @@ class CorrectionsPopup {
         includeHistoryCheckbox?.addEventListener('change', (event) => {
             this.includeChatHistory = !!event.target.checked;
         });
+
+        if (messageTextarea) {
+            const recordSelection = () => this.recordSelection(messageTextarea);
+            messageTextarea.addEventListener('mouseup', recordSelection);
+            messageTextarea.addEventListener('keyup', recordSelection);
+            messageTextarea.addEventListener('select', recordSelection);
+            messageTextarea.addEventListener('blur', recordSelection);
+            messageTextarea.addEventListener('focus', () => this.restoreSelection(messageTextarea));
+        }
     }
 
     open() {
@@ -248,6 +273,83 @@ class CorrectionsPopup {
         if (nextMessageButton) nextMessageButton.disabled = this.messageIndex >= context.chat.length - 1;
         if (prevSwipeButton) prevSwipeButton.disabled = this.swipeIndex <= 0;
         if (nextSwipeButton) nextSwipeButton.disabled = this.swipeIndex >= swipes.length - 1;
+
+        this.selectionStart = null;
+        this.selectionEnd = null;
+        this.updateSelectionIndicator();
+        this.renderSelectionOverlay(currentSwipe, messageTextarea);
+    }
+
+    recordSelection(textarea) {
+        if (!textarea) return;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        if (typeof start === 'number' && typeof end === 'number' && end > start) {
+            this.selectionStart = start;
+            this.selectionEnd = end;
+            this.updateSelectionIndicator();
+            this.renderSelectionOverlay(textarea.value || '', textarea);
+        }
+    }
+
+    restoreSelection(textarea) {
+        if (!textarea) return;
+        if (typeof this.selectionStart !== 'number' || typeof this.selectionEnd !== 'number') return;
+
+        const maxLength = textarea.value.length;
+        const start = Math.max(0, Math.min(this.selectionStart, maxLength));
+        const end = Math.max(start, Math.min(this.selectionEnd, maxLength));
+        if (end > start) {
+            textarea.setSelectionRange(start, end);
+        }
+    }
+
+    renderSelectionOverlay(text, textarea) {
+        const overlay = this.popupElement?.querySelector('#ggCorrectionsMessageOverlay');
+        if (!overlay) return;
+
+        const { start, end, hasSelection } = this.resolveSelection(text, textarea);
+        if (!hasSelection) {
+            overlay.innerHTML = escapeHtml(text || '');
+            return;
+        }
+
+        const before = escapeHtml(text.slice(0, start));
+        const selected = escapeHtml(text.slice(start, end));
+        const after = escapeHtml(text.slice(end));
+        overlay.innerHTML = `${before}<span class="gg-corrections-selection">${selected}</span>${after}`;
+    }
+
+    updateSelectionIndicator() {
+        const indicator = this.popupElement?.querySelector('#ggCorrectionsSelectionInfo');
+        if (!indicator) return;
+
+        if (typeof this.selectionStart === 'number' && typeof this.selectionEnd === 'number' && this.selectionEnd > this.selectionStart) {
+            const length = this.selectionEnd - this.selectionStart;
+            indicator.textContent = `Recorded selection: ${length} characters.`;
+        } else {
+            indicator.textContent = 'No recorded selection.';
+        }
+    }
+
+    resolveSelection(baseMessage, textarea) {
+        const activeStart = textarea?.selectionStart;
+        const activeEnd = textarea?.selectionEnd;
+        const hasActive = typeof activeStart === 'number' && typeof activeEnd === 'number' && activeEnd > activeStart;
+        if (hasActive) {
+            return { start: activeStart, end: activeEnd, hasSelection: true };
+        }
+
+        const storedStart = this.selectionStart;
+        const storedEnd = this.selectionEnd;
+        const hasStored = typeof storedStart === 'number' && typeof storedEnd === 'number' && storedEnd > storedStart;
+        if (hasStored) {
+            const boundedStart = Math.max(0, Math.min(storedStart, baseMessage.length));
+            const boundedEnd = Math.max(boundedStart, Math.min(storedEnd, baseMessage.length));
+            return { start: boundedStart, end: boundedEnd, hasSelection: boundedEnd > boundedStart };
+        }
+
+        return { start: 0, end: 0, hasSelection: false };
     }
 
     async applyCorrection() {
@@ -276,10 +378,13 @@ class CorrectionsPopup {
 
         const swipes = this._getSwipesForMessage(messageData);
         const baseMessage = swipes[this.swipeIndex] ?? messageData.mes ?? '';
-        const selectionStart = messageTextarea?.selectionStart ?? 0;
-        const selectionEnd = messageTextarea?.selectionEnd ?? 0;
-        const hasSelection = selectionEnd > selectionStart;
+        const { start: selectionStart, end: selectionEnd, hasSelection } = this.resolveSelection(baseMessage, messageTextarea);
         const selectedText = hasSelection ? baseMessage.slice(selectionStart, selectionEnd) : '';
+
+        const profileKey = 'profileCorrections';
+        const presetKey = 'presetCorrections';
+        const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
+        const targetPreset = extension_settings[extensionName]?.[presetKey] ?? '';
 
         const promptTemplate = extension_settings[extensionName]?.promptCorrections ?? '';
         const filledPrompt = promptTemplate.replace('{{input}}', instruction);
@@ -302,10 +407,6 @@ class CorrectionsPopup {
             ? `${filledPrompt}${historyBlock ? `\n\nChat history:\n${historyBlock}` : ''}\n\nFull message:\n${baseMessage}\n\nSelected text to rewrite (exact):\n${selectedText}\n\nTask: Rewrite ONLY the selected text to satisfy the instructions.\nReturn ONLY the rewritten selected text with no labels, no quotes, no code fences, and no extra commentary. The output must be ready to replace the selected text verbatim.`
             : `${filledPrompt}${historyBlock ? `\n\nChat history:\n${historyBlock}` : ''}\n\nFull message to rewrite:\n${baseMessage}\n\nTask: Rewrite the full message to satisfy the instructions.\nReturn ONLY the rewritten full message with no labels, no quotes, no code fences, and no extra commentary.`;
 
-        const profileKey = 'profileCorrections';
-        const presetKey = 'presetCorrections';
-        const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
-        const targetPreset = extension_settings[extensionName]?.[presetKey] ?? '';
         debugLog(`[GuidedGenerations][Corrections] Using profile: ${profileValue || 'current'}, preset: ${targetPreset || 'none'}`);
 
         try {

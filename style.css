@@ -438,6 +438,35 @@
     max-width: 800px;
 }
 
+.gg-corrections-message-wrap {
+    position: relative;
+}
+
+.gg-corrections-message-overlay {
+    position: absolute;
+    inset: 0;
+    padding: 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: transparent;
+    background: transparent;
+    pointer-events: none;
+    z-index: 1;
+    font: inherit;
+}
+
+.gg-corrections-message {
+    position: relative;
+    z-index: 2;
+    background-color: transparent;
+    padding: 8px;
+    font: inherit;
+}
+
+.gg-corrections-selection {
+    background-color: rgba(255, 215, 0, 0.35);
+}
+
 .gg-corrections-nav {
     display: flex;
     flex-direction: column;
