@@ -369,6 +369,7 @@ class CorrectionsPopup {
         }
 
         lastCorrectionInstruction = instruction;
+        this.close();
 
         const messageData = context.chat[this.messageIndex];
         if (!messageData) {

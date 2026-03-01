@@ -135,7 +135,7 @@ function resolvePresetNameFromManager(presetManager, presetValue) {
     return '';
 }
 
-function buildPresetOverridePayload(presetManager, presetName, apiId) {
+function buildPresetOverridePayload(presetManager, presetName, apiId, mode = 'chat') {
     if (!presetName || !presetManager) return {};
     const preset = presetManager.getCompletionPresetByName?.(presetName);
     if (!preset) {
@@ -144,6 +144,75 @@ function buildPresetOverridePayload(presetManager, presetName, apiId) {
     }
     const presetKeys = Object.keys(preset || {});
     debugLog(`[${extensionName}] buildPresetOverridePayload: preset keys=${presetKeys.join(',')}`);
+
+    if (mode === 'text') {
+        const payload = structuredClone(preset);
+        const blocklist = new Set([
+            'chat_completion_source',
+            'openai_model',
+            'claude_model',
+            'openrouter_model',
+            'openrouter_use_fallback',
+            'openrouter_group_models',
+            'openrouter_sort_models',
+            'openrouter_providers',
+            'openrouter_allow_fallbacks',
+            'openrouter_middleout',
+            'ai21_model',
+            'mistralai_model',
+            'cohere_model',
+            'perplexity_model',
+            'groq_model',
+            'chutes_model',
+            'chutes_sort_models',
+            'siliconflow_model',
+            'electronhub_model',
+            'electronhub_sort_models',
+            'electronhub_group_models',
+            'nanogpt_model',
+            'deepseek_model',
+            'aimlapi_model',
+            'xai_model',
+            'pollinations_model',
+            'moonshot_model',
+            'fireworks_model',
+            'cometapi_model',
+            'custom_model',
+            'custom_url',
+            'custom_include_body',
+            'custom_exclude_body',
+            'custom_include_headers',
+            'custom_prompt_post_processing',
+            'google_model',
+            'vertexai_model',
+            'zai_model',
+            'zai_endpoint',
+            'reverse_proxy',
+            'proxy_password',
+            'azure_base_url',
+            'azure_deployment_name',
+            'azure_api_version',
+            'azure_openai_model',
+            'model',
+            'api_type',
+            'api_server',
+            'preset_name',
+            'name',
+            'id',
+            'extensions',
+        ]);
+
+        for (const key of blocklist) {
+            delete payload[key];
+        }
+
+        if (payload.temp !== undefined && payload.temperature === undefined) {
+            payload.temperature = payload.temp;
+        }
+
+        debugLog(`[${extensionName}] buildPresetOverridePayload: text payload keys=${Object.keys(payload).join(',')}`);
+        return payload;
+    }
 
     const payload = {};
     const allowlist = new Set([
@@ -439,7 +508,7 @@ export async function requestCompletion({
                 signal: abortController.signal,
             };
 
-            const overridePayload = buildPresetOverridePayload(presetManager, resolvedPresetName, apiId);
+            const overridePayload = buildPresetOverridePayload(presetManager, resolvedPresetName, apiId, mode);
             if (Array.isArray(requestData.messages)) {
                 overridePayload.messages = requestData.messages;
             }

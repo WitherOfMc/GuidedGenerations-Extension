@@ -2,7 +2,7 @@
  * Fun Popup - Handles UI for fun prompts and interactions
  */
 
-import { getContext, extension_settings, extensionName, debugLog, requestCompletion, shouldUseDirectCall } from '../persistentGuides/guideExports.js'; // Import from central hub
+import { getContext, extension_settings, extensionName, debugLog, requestCompletion, shouldUseDirectCall, generateNewSwipe } from '../persistentGuides/guideExports.js'; // Import from central hub
 
 // Map to store fun prompts loaded from file
 let FUN_PROMPTS = {};
@@ -344,6 +344,7 @@ export class FunPopup {
         const presetKey = 'presetFun';
         const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
         const presetValue = extension_settings[extensionName]?.[presetKey] ?? '';
+        const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
         debugLog(`${extensionName}: Swipe using profile: ${profileValue || 'current'}, preset: ${presetValue || 'none'}`);
 
         const textarea = document.getElementById('send_textarea');
@@ -365,11 +366,7 @@ export class FunPopup {
                     includeChatHistory: true,
                 });
             } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptWithInput}`, {
-                    showOutput: false,
-                    handleExecutionErrors: true,
-                });
-                responseText = result?.pipe || '';
+                responseText = await this._executeSwipeViaGenerateNewSwipe(context, promptWithInput, injectionRole);
             } else {
                 console.error(`${extensionName}: context.executeSlashCommandsWithOptions not found for fun prompt swipe.`);
             }
@@ -382,6 +379,30 @@ export class FunPopup {
             await this._applySwipeUpdate(context, responseText);
         } catch (error) {
             console.error(`${extensionName}: Error executing fun prompt swipe:`, error);
+        }
+    }
+
+    async _executeSwipeViaGenerateNewSwipe(context, promptText, injectionRole) {
+        const filledPrompt = String(promptText || '').replace(/\n/g, '\\n');
+        const injectCommand = `/inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt} |`;
+        try {
+            await context.executeSlashCommandsWithOptions(injectCommand, {
+                showOutput: false,
+                handleExecutionErrors: true,
+            });
+
+            const swipeSuccess = await generateNewSwipe();
+            if (!swipeSuccess) {
+                return '';
+            }
+
+            const latestAssistant = [...(context.chat || [])].reverse().find((message) => !message?.is_user);
+            return latestAssistant?.mes || '';
+        } finally {
+            await context.executeSlashCommandsWithOptions('/flushinject instruct', {
+                showOutput: false,
+                handleExecutionErrors: true,
+            });
         }
     }
 

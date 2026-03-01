@@ -30,7 +30,7 @@ const EDIT_INTROS_OPTIONS = {
     'they-them': 'Rewrite the intro changing all references to {{user}} to use they/them pronouns.'
 };
 
-import { extensionName, getContext, extension_settings, debugLog, requestCompletion, shouldUseDirectCall } from '../persistentGuides/guideExports.js'; // Import from central hub
+import { extensionName, getContext, extension_settings, debugLog, requestCompletion, shouldUseDirectCall, generateNewSwipe } from '../persistentGuides/guideExports.js'; // Import from central hub
 
 // Class to handle the popup functionality
 export class EditIntrosPopup {
@@ -402,11 +402,7 @@ export class EditIntrosPopup {
                     includeChatHistory: false,
                 });
             } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptForModel}`, {
-                    showOutput: false,
-                    handleExecutionErrors: true,
-                });
-                updatedIntro = result?.pipe || '';
+                updatedIntro = await executeSwipeGenerationWithPrompt(context, promptForModel);
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
             }
@@ -486,11 +482,7 @@ export class EditIntrosPopup {
                     includeChatHistory: false,
                 });
             } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                const result = await context.executeSlashCommandsWithOptions(`/genraw ${promptForModel}`, {
-                    showOutput: false,
-                    handleExecutionErrors: true,
-                });
-                newIntro = result?.pipe || '';
+                newIntro = await executeSwipeGenerationWithPrompt(context, promptForModel);
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
             }
@@ -579,3 +571,29 @@ async function applyIntroUpdate(context, introText) {
 // Singleton instance
 const editIntrosPopup = new EditIntrosPopup();
 export default editIntrosPopup;
+
+async function executeSwipeGenerationWithPrompt(context, promptText) {
+    const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
+    const filledPrompt = String(promptText || '').replace(/\n/g, '\\n');
+    const injectCommand = `/inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt} |`;
+
+    try {
+        await context.executeSlashCommandsWithOptions(injectCommand, {
+            showOutput: false,
+            handleExecutionErrors: true,
+        });
+
+        const swipeSuccess = await generateNewSwipe();
+        if (!swipeSuccess) {
+            return '';
+        }
+
+        const latestAssistant = [...(context.chat || [])].reverse().find((message) => !message?.is_user);
+        return latestAssistant?.mes || '';
+    } finally {
+        await context.executeSlashCommandsWithOptions('/flushinject instruct', {
+            showOutput: false,
+            handleExecutionErrors: true,
+        });
+    }
+}
