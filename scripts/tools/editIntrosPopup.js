@@ -213,10 +213,6 @@ export class EditIntrosPopup {
 
             // Update state
             this.selectedOptions[category] = value;
-            this.isCustomSelected = false;
-
-            // Deselect custom option visually
-            customOption.classList.remove('selected');
         };
 
         options.forEach(option => {
@@ -239,26 +235,16 @@ export class EditIntrosPopup {
 
         // --- Custom Option Click Logic ---
         customOption.addEventListener('click', () => {
-            // Deselect all category options
-            this.popupElement.querySelectorAll('.gg-option:not(.gg-custom-option), .gg-suboption').forEach(el => {
-                el.classList.remove('selected');
-            });
-
-            // Reset category selections in state
-            Object.keys(this.selectedOptions).forEach(key => {
-                this.selectedOptions[key] = null;
-            });
-
-            // Select custom option
-            customOption.classList.add('selected');
-            this.isCustomSelected = true;
+            this.isCustomSelected = !this.isCustomSelected;
+            customOption.classList.toggle('selected', this.isCustomSelected);
         });
 
         // --- Custom Textarea Input Logic ---
         customCommandTextarea.addEventListener('input', () => {
-             // Automatically select 'Custom' if the user types in the textarea
-            if (!this.isCustomSelected) {
-                customOption.click(); // Simulate a click on the custom option
+             // Automatically enable custom instructions if user types.
+            if (!this.isCustomSelected && customCommandTextarea.value.trim() !== '') {
+                this.isCustomSelected = true;
+                customOption.classList.add('selected');
             }
         });
     }
@@ -267,6 +253,7 @@ export class EditIntrosPopup {
         this.popupElement.querySelectorAll('.gg-option:not(.gg-custom-option), .gg-suboption').forEach(el => {
             el.classList.remove('selected');
         });
+        this.popupElement.querySelector('.gg-custom-option')?.classList.remove('selected');
         Object.keys(this.selectedOptions).forEach(key => {
             this.selectedOptions[key] = null;
         });
@@ -275,17 +262,13 @@ export class EditIntrosPopup {
 
     restoreSelectionState() {
         const customOption = this.popupElement.querySelector('.gg-custom-option');
-        if (this.isCustomSelected) {
-            customOption.classList.add('selected');
-        } else {
-            Object.keys(this.selectedOptions).forEach(key => {
-                const selectedElement = this.popupElement.querySelector(`[data-option="${key}"], [data-value="${this.selectedOptions[key]}"]`);
-                if (selectedElement) {
-                    selectedElement.classList.add('selected');
-                }
-            });
-            customOption.classList.remove('selected'); 
-        }
+        Object.keys(this.selectedOptions).forEach(key => {
+            const selectedElement = this.popupElement.querySelector(`[data-option="${key}"], [data-value="${this.selectedOptions[key]}"]`);
+            if (selectedElement) {
+                selectedElement.classList.add('selected');
+            }
+        });
+        customOption.classList.toggle('selected', this.isCustomSelected);
     }
 
     /**
@@ -343,32 +326,29 @@ export class EditIntrosPopup {
         this.applyChangesCount++;
         let instruction = '';
         const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
+        const customCommand = customCommandTextarea.value.trim();
+        const selectedInstructions = [];
 
-        // --- Build Instruction --- 
-        if (this.isCustomSelected) {
-            const customCommand = customCommandTextarea.value.trim();
-            if (customCommand === '') {
-                alert('Custom option is selected, but the instruction text area is empty.');
-                return;
+        // Combine instructions from selected categories
+        Object.keys(this.selectedOptions).forEach(category => {
+            const selectedKey = this.selectedOptions[category];
+            if (selectedKey && EDIT_INTROS_OPTIONS[selectedKey]) {
+                selectedInstructions.push(EDIT_INTROS_OPTIONS[selectedKey]);
             }
+        });
+
+        // --- Build Instruction ---
+        if (this.isCustomSelected && customCommand) {
+            selectedInstructions.push(customCommand);
             instruction = customCommand;
             sessionStorage.setItem('gg_lastCustomCommand', customCommand);
-        } else {
-            const selectedInstructions = [];
-            // Combine instructions from selected categories
-            Object.keys(this.selectedOptions).forEach(category => {
-                const selectedKey = this.selectedOptions[category];
-                if (selectedKey && EDIT_INTROS_OPTIONS[selectedKey]) {
-                    selectedInstructions.push(EDIT_INTROS_OPTIONS[selectedKey]);
-                }
-            });
-            
-            if (selectedInstructions.length === 0) {
-                 alert('Please select at least one category option, or choose Custom and enter an instruction.');
-                 return; 
-            }
-            instruction = selectedInstructions.join('. '); // Join instructions with a period and space
         }
+
+        if (selectedInstructions.length === 0) {
+             alert('Please select at least one category option and/or add custom instructions.');
+             return;
+        }
+        instruction = selectedInstructions.join('. ');
 
         // Close the popup immediately now that validation has passed
         this.close();
@@ -388,7 +368,7 @@ export class EditIntrosPopup {
             }
 
             const messageToRewrite = context.chat[0]?.mes || '';
-            const promptForModel = `Rewrite the intro to reflect the following adjustments: ${instruction}\n\nOriginal intro:\n${messageToRewrite}`;
+            const promptForModel = `Revise the existing greeting using ONLY the requested adjustments below.\n\nRequested adjustments:\n${instruction}\n\nOriginal greeting:\n${messageToRewrite}\n\nRules:\n- Keep the greeting content, structure, formatting, links, and length as close as possible unless a requested adjustment requires a specific change.\n- Do NOT add new story events, new actions, or extra continuation text.\n- Do NOT expand the greeting.\n- Return ONLY the revised greeting text.`;
 
             const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
             let updatedIntro = '';
@@ -402,7 +382,10 @@ export class EditIntrosPopup {
                     includeChatHistory: false,
                 });
             } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                updatedIntro = await executeSwipeGenerationWithPrompt(context, promptForModel);
+                const swipeHandled = await executeSwipeGenerationWithPrompt(context, promptForModel);
+                if (swipeHandled) {
+                    return;
+                }
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
             }
@@ -428,32 +411,29 @@ export class EditIntrosPopup {
     async makeNewIntro() {
         let instruction = '';
         const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
+        const customCommand = customCommandTextarea.value.trim();
+        const selectedInstructions = [];
 
-        // --- Build Instruction (Same logic as applyChanges) --- 
-        if (this.isCustomSelected) {
-            const customCommand = customCommandTextarea.value.trim();
-            if (customCommand === '') {
-                alert('Custom option is selected, but the instruction text area is empty.');
-                return;
+        // Combine instructions from selected categories
+        Object.keys(this.selectedOptions).forEach(category => {
+            const selectedKey = this.selectedOptions[category];
+            if (selectedKey && EDIT_INTROS_OPTIONS[selectedKey]) {
+                selectedInstructions.push(EDIT_INTROS_OPTIONS[selectedKey]);
             }
+        });
+
+        // --- Build Instruction (Same logic as applyChanges) ---
+        if (this.isCustomSelected && customCommand) {
+            selectedInstructions.push(customCommand);
             instruction = customCommand;
             sessionStorage.setItem('gg_lastCustomCommand', customCommand);
-        } else {
-            const selectedInstructions = [];
-            // Combine instructions from selected categories
-            Object.keys(this.selectedOptions).forEach(category => {
-                const selectedKey = this.selectedOptions[category];
-                if (selectedKey && EDIT_INTROS_OPTIONS[selectedKey]) {
-                    selectedInstructions.push(EDIT_INTROS_OPTIONS[selectedKey]);
-                }
-            });
-            
-            if (selectedInstructions.length === 0) {
-                 alert('Please select at least one category option, or choose Custom and enter an instruction.');
-                 return; 
-            }
-            instruction = selectedInstructions.join('. '); // Join instructions with a period and space
         }
+
+        if (selectedInstructions.length === 0) {
+             alert('Please select at least one category option and/or add custom instructions.');
+             return;
+        }
+        instruction = selectedInstructions.join('. ');
 
         // Close the popup immediately now that validation has passed
         this.close();
@@ -469,7 +449,7 @@ export class EditIntrosPopup {
                 return;
             }
 
-            const promptForModel = `Write the intro based on the following description: ${instruction}`;
+            const promptForModel = `Write a single greeting based on the following requirements:\n${instruction}\n\nRules:\n- Output ONLY the greeting text.\n- Do NOT continue beyond the greeting.\n- Do NOT add extra sections, explanations, or commentary.`;
             const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
             let newIntro = '';
             if (useDirectCall) {
@@ -482,7 +462,10 @@ export class EditIntrosPopup {
                     includeChatHistory: false,
                 });
             } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                newIntro = await executeSwipeGenerationWithPrompt(context, promptForModel);
+                const swipeHandled = await executeSwipeGenerationWithPrompt(context, promptForModel);
+                if (swipeHandled) {
+                    return;
+                }
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
             }
@@ -576,8 +559,37 @@ async function executeSwipeGenerationWithPrompt(context, promptText) {
     const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
     const filledPrompt = String(promptText || '').replace(/\n/g, '\\n');
     const injectCommand = `/inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt} |`;
+    const tempMessage = {
+        name: 'Editing Greeting',
+        is_user: false,
+        is_system: false,
+        send_date: Date.now(),
+        mes: 'Editing Greeting',
+        swipes: ['Editing Greeting'],
+        swipe_id: 0,
+        force_avatar: null,
+        extra: {
+            type: 'temp_intro_edit',
+            gen_id: Date.now(),
+        },
+    };
 
+    // Insert deterministically at index 0 so generateNewSwipe targets intro, not temp.
+    context.chat.unshift(tempMessage);
+    if (typeof context.saveChat === 'function') {
+        await context.saveChat();
+    }
+    if (typeof context.reloadCurrentChat === 'function') {
+        await context.reloadCurrentChat();
+    }
+
+    let tempInserted = true;
     try {
+        await context.executeSlashCommandsWithOptions('/hide 0', {
+            showOutput: false,
+            handleExecutionErrors: true,
+        });
+
         await context.executeSlashCommandsWithOptions(injectCommand, {
             showOutput: false,
             handleExecutionErrors: true,
@@ -585,15 +597,31 @@ async function executeSwipeGenerationWithPrompt(context, promptText) {
 
         const swipeSuccess = await generateNewSwipe();
         if (!swipeSuccess) {
-            return '';
+            return false;
         }
-
-        const latestAssistant = [...(context.chat || [])].reverse().find((message) => !message?.is_user);
-        return latestAssistant?.mes || '';
+        return true;
     } finally {
         await context.executeSlashCommandsWithOptions('/flushinject instruct', {
             showOutput: false,
             handleExecutionErrors: true,
         });
+
+        if (tempInserted) {
+            if (context.chat[0] === tempMessage) {
+                context.chat.splice(0, 1);
+            } else {
+                const fallbackIndex = context.chat.findIndex((message) => message?.extra?.gen_id === tempMessage.extra.gen_id);
+                if (fallbackIndex !== -1) {
+                    context.chat.splice(fallbackIndex, 1);
+                }
+            }
+            if (typeof context.saveChat === 'function') {
+                await context.saveChat();
+            }
+            if (typeof context.reloadCurrentChat === 'function') {
+                await context.reloadCurrentChat();
+            }
+            debugLog('[EditIntros] Removed temporary "Editing Greeting" message after swipe generation.');
+        }
     }
 }
