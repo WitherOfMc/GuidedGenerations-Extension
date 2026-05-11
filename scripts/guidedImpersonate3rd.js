@@ -1,5 +1,5 @@
 // scripts/guidedImpersonate3rd.js
-import { extension_settings, extensionName, debugLog, getPreviousImpersonateInput, setPreviousImpersonateInput, getLastImpersonateResult, setLastImpersonateResult, requestCompletion, shouldUseDirectCall } from './persistentGuides/guideExports.js'; // Import from central hub
+import { extension_settings, extensionName, debugLog, getPreviousImpersonateInput, setPreviousImpersonateInput, getLastImpersonateResult, setLastImpersonateResult, requestCompletion, shouldUseDirectCall } from './persistentGuides/guideExports.js';
 
 const guidedImpersonate3rd = async () => {
     const textarea = document.getElementById('send_textarea');
@@ -10,14 +10,12 @@ const guidedImpersonate3rd = async () => {
     const currentInputText = textarea.value;
     const lastGeneratedText = getLastImpersonateResult(); 
 
-    // Check if the current input matches the last generated text
     if (lastGeneratedText && currentInputText === lastGeneratedText) {
         textarea.value = getPreviousImpersonateInput(); 
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         return; 
     }
 
-    // --- If not restoring, proceed with impersonation ---
     setPreviousImpersonateInput(currentInputText); 
 
     // 1. REGEX CLEANUP: Extract matches and prepare clean text
@@ -28,15 +26,14 @@ const guidedImpersonate3rd = async () => {
     if (customRegexStr.trim() !== '') {
         try {
             let pattern = customRegexStr;
-            let flags = 'g'; // Default to global replace
+            let flags = 'g';
             
-            // Parse format if user enters /pattern/flags
             if (customRegexStr.startsWith('/') && customRegexStr.lastIndexOf('/') > 0) {
                 const lastSlash = customRegexStr.lastIndexOf('/');
                 pattern = customRegexStr.substring(1, lastSlash);
                 flags = customRegexStr.substring(lastSlash + 1);
             }
-            if (!flags.includes('g')) flags += 'g'; // Force global flag
+            if (!flags.includes('g')) flags += 'g';
             
             const regex = new RegExp(pattern, flags);
             const matches = cleanedInputText.match(regex);
@@ -51,14 +48,9 @@ const guidedImpersonate3rd = async () => {
         }
     }
 
-    // 2. TEMPORARILY UPDATE UI: Hide matches from the text box 
-    // This prevents ST from reading the image into the context prompt!
-    if (extractedMatches.length > 0) {
-        textarea.value = cleanedInputText;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    // NOTE: No textarea update here — direct calls use filledPrompt, not textarea.value.
+    // The image markdown is already excluded from cleanedInputText / filledPrompt.
 
-    // Resolve target profile and preset from settings
     const profileKey = 'profileImpersonate3rd';
     const presetKey = 'presetImpersonate3rd';
     const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
@@ -67,7 +59,7 @@ const guidedImpersonate3rd = async () => {
     const promptTemplate = extension_settings[extensionName]?.promptImpersonate3rd ?? '';
     const filledPrompt = promptTemplate.replace('{{input}}', cleanedInputText);
 
-    let isSuccess = false; // Track if generation completed successfully
+    let isSuccess = false;
 
     try {
         const useDirectCall = true;
@@ -83,7 +75,7 @@ const guidedImpersonate3rd = async () => {
             if (completion && completion.trim() !== '') {
                 let finalCompletion = completion.trim();
                 
-                // 3. RESTORE EXTRACTED CONTENT: Append the saved markdown back to the AI's result
+                // 2. RESTORE EXTRACTED CONTENT: Append saved markdown back to the result
                 if (extractedMatches.length > 0) {
                     finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
                 }
@@ -99,6 +91,12 @@ const guidedImpersonate3rd = async () => {
         } else {
             const context = SillyTavern.getContext();
             if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                // For slash commands, ST WILL read textarea — so clean it first here only
+                if (extractedMatches.length > 0) {
+                    textarea.value = cleanedInputText;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
                 const stscriptCommand = `/impersonate await=true ${filledPrompt} |`;
                 await context.executeSlashCommandsWithOptions(stscriptCommand);
                 
@@ -106,9 +104,9 @@ const guidedImpersonate3rd = async () => {
                 
                 if (extractedMatches.length > 0) {
                     if (!finalCompletion.includes(extractedMatches[0])) {
-                         finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
-                         textarea.value = finalCompletion;
-                         textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                        finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
+                        textarea.value = finalCompletion;
+                        textarea.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                 }
                 
@@ -123,7 +121,7 @@ const guidedImpersonate3rd = async () => {
         console.error(`[GuidedGenerations] Error executing Guided Impersonate (3rd): ${error}`);
         setLastImpersonateResult(''); 
     } finally {
-        // 4. SAFETY NET: If generation failed or returned empty, restore the original input
+        // SAFETY NET: restore original input if generation failed
         if (!isSuccess && extractedMatches.length > 0) {
             textarea.value = currentInputText;
             textarea.dispatchEvent(new Event('input', { bubbles: true }));
