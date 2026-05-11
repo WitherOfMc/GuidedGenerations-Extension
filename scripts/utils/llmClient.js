@@ -212,6 +212,8 @@ function buildPresetOverridePayload(presetManager, presetName, apiId, mode = 'ch
         }
 
         debugLog(`[${extensionName}] buildPresetOverridePayload: text payload keys=${Object.keys(payload).join(',')}`);
+        payload.thinking = { type: 'disabled' };
+        delete payload.reasoning_effort;
         return payload;
     }
 
@@ -550,6 +552,7 @@ export async function requestCompletion({
             debugLog(`[${extensionName}] requestCompletion: using ConnectionManagerRequestService for profile "${resolvedProfileName}" includePreset=false`);
             emitGenerationEvent(context, 'GENERATION_STARTED', { source: extensionName });
             const promptPayload = mode === 'chat' ? requestData.messages : typeof prompt === 'string' ? prompt : '';
+            console.log('[DEBUG] overridePayload:', JSON.stringify(overridePayload));
             const result = await connectionManagerService.sendRequest(
                 profile.id,
                 promptPayload,
