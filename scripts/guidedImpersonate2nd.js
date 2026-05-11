@@ -40,7 +40,7 @@ const guidedImpersonate2nd = async () => {
     const filledPrompt = promptTemplate.replace('{{input}}', currentInputText);
 
     try {
-        const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
+        const useDirectCall = true;
         if (useDirectCall) {
             debugLog('[Impersonate-2nd] Requesting direct completion...');
             const completion = await requestCompletion({
