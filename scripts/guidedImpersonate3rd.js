@@ -40,7 +40,7 @@ const guidedImpersonate3rd = async () => {
     const filledPrompt = promptTemplate.replace('{{input}}', currentInputText);
 
     try {
-        const useDirectCall = true;
+        const useDirectCall = extension_settings[extensionName]?.impersonateAsUser ?? false;
         if (useDirectCall) {
             debugLog('[Impersonate-3rd] Requesting direct completion...');
             const completion = await requestCompletion({
