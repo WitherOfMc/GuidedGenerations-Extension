@@ -271,7 +271,11 @@ function buildPresetOverridePayload(presetManager, presetName, apiId, mode = 'ch
     const promptKeyPattern = /_prompt$/i;
     presetKeys.forEach((key) => {
         if (allowlist.has(key) || promptKeyPattern.test(key)) {
-            payload[key] = preset[key];
+            if (key === 'thinking' && typeof preset[key] === 'object') {
+                payload[key] = { ...preset[key] };
+            } else {
+                payload[key] = preset[key];
+            }
         }
     });
 
