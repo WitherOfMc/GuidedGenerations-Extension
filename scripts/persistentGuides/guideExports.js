@@ -85,7 +85,8 @@ const defaultSettings = {
     showRevertButton: false,
     integrateQrBar: true,
     debugMode: false,
-    injectionEndRole: 'system'
+    injectionEndRole: 'system',
+    impersonateAsUser: true
 };
 
 // Utility functions
