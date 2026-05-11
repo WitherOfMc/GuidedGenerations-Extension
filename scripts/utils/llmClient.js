@@ -482,7 +482,9 @@ export async function requestCompletion({
     }
 
     const requestData = { ...requestOverrides };
-    requestData.thinking = { type: 'disabled' };
+    requestData.thinking = { type: 'disabled', budget_tokens: 0 };
+    requestData.enable_thinking = false;
+    requestData.reasoning_effort = null;
     if (mode === 'text') {
         requestData.prompt = typeof prompt === 'string' ? prompt : '';
     } else if (Array.isArray(messages) && messages.length > 0) {
@@ -539,7 +541,9 @@ export async function requestCompletion({
             };
 
             const overridePayload = buildPresetOverridePayload(presetManager, resolvedPresetName, apiId, mode);
-            overridePayload.thinking = { type: 'disabled' };
+            overridePayload.thinking = { type: 'disabled', budget_tokens: 0 };
+            overridePayload.enable_thinking = false;
+            overridePayload.reasoning_effort = null;
             if (Array.isArray(requestData.messages)) {
                 overridePayload.messages = requestData.messages;
             }
