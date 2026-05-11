@@ -481,7 +481,10 @@ export async function requestCompletion({
         return '';
     }
 
-    const requestData = { ...requestOverrides };
+    const requestData = { 
+        ...requestOverrides,
+        thinking: { type: 'disabled' } 
+    };
     if (mode === 'text') {
         requestData.prompt = typeof prompt === 'string' ? prompt : '';
     } else if (Array.isArray(messages) && messages.length > 0) {
