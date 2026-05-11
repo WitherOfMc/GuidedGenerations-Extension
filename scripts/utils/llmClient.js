@@ -11,6 +11,7 @@ import {
     setExternalAbortController,
     setSendButtonState,
     getOpenAIPromptManagerHelpers,
+    extension_settings
 } from '../persistentGuides/guideExports.js';
 
 const TEXT_API_IDS = new Set([
