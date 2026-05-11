@@ -43,7 +43,8 @@ const guidedImpersonate3rd = async () => {
         const useDirectCall = true;
         if (useDirectCall) {
             debugLog('[Impersonate-3rd] Requesting direct completion...');
-            const completion = await requestCompletion({
+            // Changed from const to let so we can modify it with the regex
+            let completion = await requestCompletion({
                 profileName: profileValue,
                 presetName: presetValue,
                 prompt: filledPrompt,
@@ -51,6 +52,27 @@ const guidedImpersonate3rd = async () => {
             });
 
             if (completion && completion.trim() !== '') {
+                // Apply Custom Cleanup Regex if defined in settings
+                const customRegexStr = extension_settings[extensionName]?.impersonationRegex ?? '';
+                if (customRegexStr.trim() !== '') {
+                    try {
+                        let pattern = customRegexStr;
+                        let flags = 'g'; // Default to global replace
+                        
+                        // Parse format if user enters /pattern/flags
+                        if (customRegexStr.startsWith('/') && customRegexStr.lastIndexOf('/') > 0) {
+                            const lastSlash = customRegexStr.lastIndexOf('/');
+                            pattern = customRegexStr.substring(1, lastSlash);
+                            flags = customRegexStr.substring(lastSlash + 1) || 'g';
+                        }
+                        
+                        const regex = new RegExp(pattern, flags);
+                        completion = completion.replace(regex, '');
+                    } catch (e) {
+                        console.warn('[GuidedGenerations] Invalid Impersonation Regex provided in settings:', e);
+                    }
+                }
+
                 textarea.value = completion;
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
                 setLastImpersonateResult(completion);
