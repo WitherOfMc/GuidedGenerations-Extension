@@ -1,5 +1,5 @@
 // scripts/guidedImpersonate.js
-import { extension_settings, extensionName, debugLog, getPreviousImpersonateInput, setPreviousImpersonateInput, getLastImpersonateResult, setLastImpersonateResult, requestCompletion, shouldUseDirectCall } from './persistentGuides/guideExports.js'; // Import from central hub
+import { extension_settings, extensionName, debugLog, getPreviousImpersonateInput, setPreviousImpersonateInput, getLastImpersonateResult, setLastImpersonateResult, requestCompletion, shouldUseDirectCall } from './persistentGuides/guideExports.js';
 
 const guidedImpersonate = async () => {
     const textarea = document.getElementById('send_textarea');
@@ -8,36 +8,60 @@ const guidedImpersonate = async () => {
         return;
     }
     const currentInputText = textarea.value;
-    const lastGeneratedText = getLastImpersonateResult(); // Use getter
+    const lastGeneratedText = getLastImpersonateResult();
 
-    // Check if the current input matches the last generated text
     if (lastGeneratedText && currentInputText === lastGeneratedText) {
-        textarea.value = getPreviousImpersonateInput(); // Use getter
+        textarea.value = getPreviousImpersonateInput();
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        return; // Restoration done, exit
+        return;
     }
 
-    // --- If not restoring, proceed with impersonation ---
-    setPreviousImpersonateInput(currentInputText); // Use setter
+    setPreviousImpersonateInput(currentInputText);
 
-    // Resolve target profile and preset from settings
+    // 1. REGEX CLEANUP: Extract matches and prepare clean text
+    let cleanedInputText = currentInputText;
+    let extractedMatches = [];
+    let builtRegex = null;
+
+    const customRegexStr = extension_settings[extensionName]?.impersonationRegex ?? '';
+    if (customRegexStr.trim() !== '') {
+        try {
+            let pattern = customRegexStr;
+            let flags = 'g';
+
+            if (customRegexStr.startsWith('/') && customRegexStr.lastIndexOf('/') > 0) {
+                const lastSlash = customRegexStr.lastIndexOf('/');
+                pattern = customRegexStr.substring(1, lastSlash);
+                flags = customRegexStr.substring(lastSlash + 1);
+            }
+            if (!flags.includes('g')) flags += 'g';
+
+            builtRegex = new RegExp(pattern, flags);
+            const matches = cleanedInputText.match(builtRegex);
+            if (matches) extractedMatches = matches;
+            cleanedInputText = cleanedInputText.replace(builtRegex, '').trim();
+            debugLog('[Impersonate-1st] Regex applied. Extracted:', extractedMatches);
+        } catch (e) {
+            console.warn('[GuidedGenerations] Invalid Impersonation Regex provided in settings:', e);
+        }
+    }
+
     const profileKey = 'profileImpersonate1st';
     const presetKey = 'presetImpersonate1st';
     const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
     const presetValue = extension_settings[extensionName]?.[presetKey] ?? '';
-    
-    // Debug: Log the exact values being retrieved
+
     debugLog(`[Impersonate-1st] Profile key: "${profileKey}"`);
     debugLog(`[Impersonate-1st] Preset key: "${presetKey}"`);
     debugLog(`[Impersonate-1st] Profile value from settings: "${profileValue}"`);
     debugLog(`[Impersonate-1st] Preset value from settings: "${presetValue}"`);
     debugLog(`[Impersonate-1st] All profile settings:`, Object.keys(extension_settings[extensionName] || {}).filter(key => key.startsWith('profile')));
-    
     debugLog(`[Impersonate-1st] Using profile: ${profileValue || 'current'}, preset: ${presetValue || 'none'}`);
-    
-    // Use user-defined impersonate prompt override
+
     const promptTemplate = extension_settings[extensionName]?.promptImpersonate1st ?? '';
-    const filledPrompt = promptTemplate.replace('{{input}}', currentInputText);
+    const filledPrompt = promptTemplate.replace('{{input}}', cleanedInputText);
+
+    let isSuccess = false;
 
     try {
         const useDirectCall = true;
@@ -48,12 +72,21 @@ const guidedImpersonate = async () => {
                 presetName: presetValue,
                 prompt: filledPrompt,
                 debugLabel: 'impersonate:1st',
+                cleanupRegex: builtRegex,
             });
 
             if (completion && completion.trim() !== '') {
-                textarea.value = completion;
+                let finalCompletion = completion.trim();
+
+                // 2. RESTORE EXTRACTED CONTENT: Append saved markdown back to the result
+                if (extractedMatches.length > 0) {
+                    finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
+                }
+
+                textarea.value = finalCompletion;
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
-                setLastImpersonateResult(completion);
+                setLastImpersonateResult(finalCompletion);
+                isSuccess = true;
                 debugLog('[Impersonate-1st] Completion received and stored.');
             } else {
                 debugLog('[Impersonate-1st] Completion empty, input unchanged.');
@@ -61,9 +94,26 @@ const guidedImpersonate = async () => {
         } else {
             const context = SillyTavern.getContext();
             if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                if (extractedMatches.length > 0) {
+                    textarea.value = cleanedInputText;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
                 const stscriptCommand = `/impersonate await=true ${filledPrompt} |`;
                 await context.executeSlashCommandsWithOptions(stscriptCommand);
+
+                let finalCompletion = textarea.value.trim();
+
+                if (extractedMatches.length > 0) {
+                    if (!finalCompletion.includes(extractedMatches[0])) {
+                        finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
+                        textarea.value = finalCompletion;
+                        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }
+
                 setLastImpersonateResult(textarea.value);
+                isSuccess = true;
                 debugLog('[Impersonate-1st] Slash command completed, input stored.');
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
@@ -71,9 +121,13 @@ const guidedImpersonate = async () => {
         }
     } catch (error) {
         console.error(`[GuidedGenerations] Error executing Guided Impersonate (1st): ${error}`);
-        setLastImpersonateResult(''); // Use setter to clear shared state on error
+        setLastImpersonateResult('');
+    } finally {
+        if (!isSuccess && extractedMatches.length > 0) {
+            textarea.value = currentInputText;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     }
 };
 
-// Export the function
 export { guidedImpersonate };
