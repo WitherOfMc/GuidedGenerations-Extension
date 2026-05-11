@@ -328,7 +328,7 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         const { prompt = '', includeChatHistory = true } = options;
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
 
-        // Safely extract raw chat history without modifying it
+        // Extract ST's raw chat array without modifying it
         let rawChat = [];
         if (Array.isArray(baseMessages) && baseMessages.length > 0 && isRawChatMessage(baseMessages[0])) {
             rawChat = baseMessages;
@@ -354,22 +354,22 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             cyclePrompt: context?.cyclePrompt || '',
             systemPromptOverride: context?.systemPromptOverride || '',
             jailbreakPromptOverride: context?.jailbreakPromptOverride || '',
-            messages: rawChat, // Pass unmodified ST chat
+            messages: rawChat, 
             messageExamples: resolvedExamples,
         };
 
-        // Step 1: Let SillyTavern process the normal messages natively
+        // Let SillyTavern build the perfect history array first
         let [messages] = await helpers.prepareOpenAIMessages(params, false);
 
-        // Step 2: Safely append our impersonation prompt to the end based on the toggle setting
+        // Then, append our impersonate prompt at the very end
         if (rawPrompt) {
-            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
+            // Read toggle (Defaulting to 'true' / 'user' if it fails to read)
+            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? true;
             const roleToUse = isUserRole ? 'user' : 'system';
             
-            if (!Array.isArray(messages)) {
-                messages = [];
-            }
+            if (!Array.isArray(messages)) messages = [];
             
+            // Push formatted message to the array
             messages.push({ role: roleToUse, content: rawPrompt });
         }
 
