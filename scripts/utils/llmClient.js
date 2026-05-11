@@ -238,6 +238,8 @@ function buildPresetOverridePayload(presetManager, presetName, apiId, mode = 'ch
         'functions',
         'reasoning_effort',
         'verbosity',
+        'reasoning_effort',
+        'thinking',
         'enable_web_search',
         'request_images',
         'request_image_aspect_ratio',
