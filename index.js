@@ -193,6 +193,7 @@ export const defaultSettings = {
     showSpellcheckerButton: false,
     showClearInputButton: false,
     impersonateAsUser: false, // Default off: Toggle for impersonating as user in guided impersonate
+    impersonationRegex: '',
     showUndoButton: false, // Default off for Undo Last Addition button
     showRevertButton: false, // Default off for Revert to Original button
     integrateQrBar: true, // Default on: Toggle for QR bar integration
@@ -397,6 +398,12 @@ async function updateSettingsUI() {
             injectionRoleSelect.value = extension_settings[extensionName].injectionEndRole;
         }
 
+        // Populate the Custom Regex input
+        const regexInput = document.getElementById('gg_impersonationRegex');
+        if (regexInput && extension_settings[extensionName].impersonationRegex !== undefined) {
+            regexInput.value = extension_settings[extensionName].impersonationRegex;
+        }
+        
         // Populate profile dropdowns
         try {
             const profileList = await getProfileList();
