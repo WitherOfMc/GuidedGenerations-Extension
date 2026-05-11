@@ -326,32 +326,18 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
         const { prompt = '', includeChatHistory = true } = options;
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-        
-        // FIX: Use raw SillyTavern chat objects instead of converting them early
+
+        // Safely extract raw chat history without modifying it
         let rawChat = [];
         if (Array.isArray(baseMessages) && baseMessages.length > 0 && isRawChatMessage(baseMessages[0])) {
-            rawChat = [...baseMessages];
+            rawChat = baseMessages;
         } else if (includeChatHistory) {
-            rawChat = [...(context?.chat || [])];
-        }
-
-        // FIX: Append our custom prompt to the END of the chat history as a raw object
-        if (rawPrompt) {
-            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
-            
-            rawChat.push({
-                name: isUserRole ? (context?.name1 || 'User') : 'System',
-                is_user: isUserRole,
-                is_system: !isUserRole,
-                is_name: false,
-                mes: rawPrompt,
-                extra: {}
-            });
+            rawChat = context?.chat || [];
         }
 
         const resolvedExamples = Array.isArray(context?.messageExamples) ? context.messageExamples : [];
         const character = context?.characters?.[context?.characterId] || {};
-        
+
         const params = {
             name2: context?.name2 || character?.name || '',
             charDescription: character?.description || '',
@@ -367,11 +353,25 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             cyclePrompt: context?.cyclePrompt || '',
             systemPromptOverride: context?.systemPromptOverride || '',
             jailbreakPromptOverride: context?.jailbreakPromptOverride || '',
-            messages: rawChat, // Pass raw ST objects to avoid the crash
+            messages: rawChat, // Pass unmodified ST chat
             messageExamples: resolvedExamples,
         };
-        
-        const [messages] = await helpers.prepareOpenAIMessages(params, false);
+
+        // Step 1: Let SillyTavern process the normal messages natively
+        let [messages] = await helpers.prepareOpenAIMessages(params, false);
+
+        // Step 2: Safely append our impersonation prompt to the end based on the toggle setting
+        if (rawPrompt) {
+            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
+            const roleToUse = isUserRole ? 'user' : 'system';
+            
+            if (!Array.isArray(messages)) {
+                messages = [];
+            }
+            
+            messages.push({ role: roleToUse, content: rawPrompt });
+        }
+
         if (Array.isArray(messages) && messages.length > 0) {
             debugLog(`[${extensionName}] buildChatMessagesWithPromptManager: built ${messages.length} messages`);
             return messages;
