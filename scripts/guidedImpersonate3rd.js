@@ -8,19 +8,19 @@ const guidedImpersonate3rd = async () => {
         return;
     }
     const currentInputText = textarea.value;
-    const lastGeneratedText = getLastImpersonateResult(); // Use getter
+    const lastGeneratedText = getLastImpersonateResult(); 
 
     // Check if the current input matches the last generated text
     if (lastGeneratedText && currentInputText === lastGeneratedText) {
-        textarea.value = getPreviousImpersonateInput(); // Use getter
+        textarea.value = getPreviousImpersonateInput(); 
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        return; // Restoration done, exit
+        return; 
     }
 
     // --- If not restoring, proceed with impersonation ---
-    setPreviousImpersonateInput(currentInputText); // Use setter
+    setPreviousImpersonateInput(currentInputText); 
 
-    // 1. REGEX CLEANUP: Strip from AI prompt, but save to restore later so it remains visible
+    // 1. REGEX CLEANUP: Extract matches and prepare clean text
     let cleanedInputText = currentInputText;
     let extractedMatches = [];
     
@@ -36,22 +36,26 @@ const guidedImpersonate3rd = async () => {
                 pattern = customRegexStr.substring(1, lastSlash);
                 flags = customRegexStr.substring(lastSlash + 1);
             }
-            if (!flags.includes('g')) flags += 'g'; // Force global flag to catch all instances
+            if (!flags.includes('g')) flags += 'g'; // Force global flag
             
             const regex = new RegExp(pattern, flags);
-            
-            // Store the matches (e.g., the ![](...) markdown)
             const matches = cleanedInputText.match(regex);
+            
             if (matches) {
                 extractedMatches = matches;
             }
-            
-            // Remove the matches from the text we are about to send to the AI
             cleanedInputText = cleanedInputText.replace(regex, '').trim();
             debugLog('[Impersonate-3rd] Regex applied. Extracted:', extractedMatches);
         } catch (e) {
             console.warn('[GuidedGenerations] Invalid Impersonation Regex provided in settings:', e);
         }
+    }
+
+    // 2. TEMPORARILY UPDATE UI: Hide matches from the text box 
+    // This prevents ST from reading the image into the context prompt!
+    if (extractedMatches.length > 0) {
+        textarea.value = cleanedInputText;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     // Resolve target profile and preset from settings
@@ -60,11 +64,10 @@ const guidedImpersonate3rd = async () => {
     const profileValue = extension_settings[extensionName]?.[profileKey] ?? '';
     const presetValue = extension_settings[extensionName]?.[presetKey] ?? '';
     
-    debugLog(`[Impersonate-3rd] Using profile: ${profileValue || 'current'}, preset: ${presetValue || 'none'}`);
-    
-    // Use user-defined impersonate prompt override, but inject the CLEANED text
     const promptTemplate = extension_settings[extensionName]?.promptImpersonate3rd ?? '';
     const filledPrompt = promptTemplate.replace('{{input}}', cleanedInputText);
+
+    let isSuccess = false; // Track if generation completed successfully
 
     try {
         const useDirectCall = true;
@@ -80,14 +83,15 @@ const guidedImpersonate3rd = async () => {
             if (completion && completion.trim() !== '') {
                 let finalCompletion = completion.trim();
                 
-                // 2. RESTORE EXTRACTED CONTENT: Prepend the saved markdown back to the AI's result
+                // 3. RESTORE EXTRACTED CONTENT: Append the saved markdown back to the AI's result
                 if (extractedMatches.length > 0) {
-                    finalCompletion = extractedMatches.join(' ') + ' ' + finalCompletion;
+                    finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
                 }
 
                 textarea.value = finalCompletion;
                 textarea.dispatchEvent(new Event('input', { bubbles: true }));
                 setLastImpersonateResult(finalCompletion);
+                isSuccess = true;
                 debugLog('[Impersonate-3rd] Completion received and stored.');
             } else {
                 debugLog('[Impersonate-3rd] Completion empty, input unchanged.');
@@ -100,17 +104,16 @@ const guidedImpersonate3rd = async () => {
                 
                 let finalCompletion = textarea.value.trim();
                 
-                // Restore matches for the slash command fallback as well
                 if (extractedMatches.length > 0) {
-                    // Check to avoid duplicating if the slash command mysteriously kept it
                     if (!finalCompletion.includes(extractedMatches[0])) {
-                         finalCompletion = extractedMatches.join(' ') + ' ' + finalCompletion;
+                         finalCompletion = finalCompletion + '\n\n' + extractedMatches.join('\n');
                          textarea.value = finalCompletion;
                          textarea.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                 }
                 
                 setLastImpersonateResult(textarea.value);
+                isSuccess = true;
                 debugLog('[Impersonate-3rd] Slash command completed, input stored.');
             } else {
                 console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
@@ -118,7 +121,13 @@ const guidedImpersonate3rd = async () => {
         }
     } catch (error) {
         console.error(`[GuidedGenerations] Error executing Guided Impersonate (3rd): ${error}`);
-        setLastImpersonateResult(''); // Use setter to clear shared state on error
+        setLastImpersonateResult(''); 
+    } finally {
+        // 4. SAFETY NET: If generation failed or returned empty, restore the original input
+        if (!isSuccess && extractedMatches.length > 0) {
+            textarea.value = currentInputText;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     }
 };
 
