@@ -311,9 +311,6 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
 
     const originalSettings = structuredClone(helpers.oai_settings || {});
     const preset = getOpenAIPresetByName(helpers, presetName);
-    if (!preset) {
-        debugLog(`[${extensionName}] buildChatMessagesWithPromptManager: preset "${presetName}" not found in openai settings.`);
-    }
 
     try {
         if (preset) {
@@ -329,29 +326,32 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
         const { prompt = '', includeChatHistory = true } = options;
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-        let resolvedBaseMessages = baseMessages;
-        if (!Array.isArray(resolvedBaseMessages) || resolvedBaseMessages.length === 0) {
-            resolvedBaseMessages = includeChatHistory
-                ? helpers.setOpenAIMessages?.(context?.chat || []) || []
-                : [];
-        } else if (isRawChatMessage(resolvedBaseMessages[0])) {
-            resolvedBaseMessages = helpers.setOpenAIMessages?.(resolvedBaseMessages) || [];
+        
+        // FIX: Use raw SillyTavern chat objects instead of converting them early
+        let rawChat = [];
+        if (Array.isArray(baseMessages) && baseMessages.length > 0 && isRawChatMessage(baseMessages[0])) {
+            rawChat = [...baseMessages];
+        } else if (includeChatHistory) {
+            rawChat = [...(context?.chat || [])];
         }
 
+        // FIX: Append our custom prompt to the END of the chat history as a raw object
         if (rawPrompt) {
-            // Check the toggle to determine the role
             const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
-            const roleToUse = isUserRole ? 'user' : 'system';
             
-            // setOpenAIMessages returns newest-first, so prepend the new prompt
-            resolvedBaseMessages = [{ role: roleToUse, content: rawPrompt }, ...(resolvedBaseMessages || [])];
+            rawChat.push({
+                name: isUserRole ? (context?.name1 || 'User') : 'System',
+                is_user: isUserRole,
+                is_system: !isUserRole,
+                is_name: false,
+                mes: rawPrompt,
+                extra: {}
+            });
         }
 
-        const resolvedExamples = Array.isArray(context?.messageExamples)
-            ? helpers.setOpenAIMessageExamples?.(context.messageExamples) || context.messageExamples
-            : [];
-
+        const resolvedExamples = Array.isArray(context?.messageExamples) ? context.messageExamples : [];
         const character = context?.characters?.[context?.characterId] || {};
+        
         const params = {
             name2: context?.name2 || character?.name || '',
             charDescription: character?.description || '',
@@ -367,14 +367,13 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             cyclePrompt: context?.cyclePrompt || '',
             systemPromptOverride: context?.systemPromptOverride || '',
             jailbreakPromptOverride: context?.jailbreakPromptOverride || '',
-            messages: resolvedBaseMessages || [],
+            messages: rawChat, // Pass raw ST objects to avoid the crash
             messageExamples: resolvedExamples,
         };
+        
         const [messages] = await helpers.prepareOpenAIMessages(params, false);
         if (Array.isArray(messages) && messages.length > 0) {
-            debugLog(
-                `[${extensionName}] buildChatMessagesWithPromptManager: built ${messages.length} messages (base=${baseMessages?.length || 0})`
-            );
+            debugLog(`[${extensionName}] buildChatMessagesWithPromptManager: built ${messages.length} messages`);
             return messages;
         }
     } catch (error) {
@@ -383,7 +382,7 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         Object.assign(helpers.oai_settings, originalSettings);
     }
 
-    return baseMessages;
+    return baseMessages || [];
 }
 
 export async function shouldUseDirectCall(profileName = '', presetName = '') {
