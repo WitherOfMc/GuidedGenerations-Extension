@@ -1,3 +1,18 @@
+const originalFetch = window.fetch;
+window.fetch = async function(url, options, ...rest) {
+    if (typeof url === 'string' && url.includes('/chat/completions') && options?.body) {
+        try {
+            const body = JSON.parse(options.body);
+            if (body.model?.includes('deepseek')) {
+                body.thinking = { type: 'disabled' };
+                delete body.reasoning_effort;
+                options = { ...options, body: JSON.stringify(body) };
+            }
+        } catch {}
+    }
+    return originalFetch.call(this, url, options, ...rest);
+};
+
 import { eventSource, saveSettingsDebounced } from '../../../../script.js'; // For event handling (will use later)
 // Removed the incorrect SillyTavern import
 
