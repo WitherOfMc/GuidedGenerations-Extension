@@ -313,6 +313,21 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
     const originalSettings = structuredClone(helpers.oai_settings || {});
     const preset = getOpenAIPresetByName(helpers, presetName);
 
+    // Patch last user message in context.chat to strip image markdown
+    let patchedMessage = null;
+    let patchedIndex = -1;
+    const { prompt = '', includeChatHistory = true, cleanupRegex = null } = options;
+    if (cleanupRegex instanceof RegExp && Array.isArray(context?.chat) && context.chat.length > 0) {
+        for (let i = context.chat.length - 1; i >= 0; i--) {
+            if (context.chat[i]?.is_user) {
+                patchedIndex = i;
+                patchedMessage = context.chat[i].mes;
+                context.chat[i] = { ...context.chat[i], mes: context.chat[i].mes.replace(cleanupRegex, '').trim() };
+                break;
+            }
+        }
+    }
+
     try {
         if (preset) {
             Object.assign(helpers.oai_settings, preset);
@@ -325,7 +340,6 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         }
 
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
-        const { prompt = '', includeChatHistory = true } = options;
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
         
         // 1. Let SillyTavern convert the chat to "newest-first" OpenAI format
@@ -340,11 +354,8 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
 
         // 2. Inject our Impersonation prompt with the UI Toggle
         if (rawPrompt) {
-            // Read toggle (fallback to false/system if undefined)
             const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
             const roleToUse = isUserRole ? 'user' : 'system';
-            
-            // setOpenAIMessages returns newest-first, so we prepend to put it at the very end of the chat
             resolvedBaseMessages = [{ role: roleToUse, content: rawPrompt }, ...(resolvedBaseMessages || [])];
         }
 
@@ -383,6 +394,10 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
     } catch (error) {
         debugWarn(`[${extensionName}] Failed to build messages with prompt manager:`, error);
     } finally {
+        // Restore the original message content
+        if (patchedIndex >= 0 && patchedMessage !== null) {
+            context.chat[patchedIndex] = { ...context.chat[patchedIndex], mes: patchedMessage };
+        }
         Object.assign(helpers.oai_settings, originalSettings);
     }
 
@@ -430,6 +445,7 @@ export async function requestCompletion({
     optionsOverrides = {},
     debugLabel = '',
     includeChatHistory = true,
+    cleanupRegex = null,
 } = {}) {
     const context = getContext();
     if (!context) {
@@ -480,7 +496,7 @@ export async function requestCompletion({
             context,
             requestData.messages,
             resolvedPresetName,
-            { prompt, includeChatHistory }
+            { prompt, includeChatHistory, cleanupRegex }
         );
     }
 
