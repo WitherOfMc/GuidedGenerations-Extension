@@ -327,18 +327,34 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
         const { prompt = '', includeChatHistory = true } = options;
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-
-        // Extract ST's raw chat array without modifying it
-        let rawChat = [];
-        if (Array.isArray(baseMessages) && baseMessages.length > 0 && isRawChatMessage(baseMessages[0])) {
-            rawChat = baseMessages;
-        } else if (includeChatHistory) {
-            rawChat = context?.chat || [];
+        
+        // 1. Let SillyTavern convert the chat to "newest-first" OpenAI format
+        let resolvedBaseMessages = baseMessages;
+        if (!Array.isArray(resolvedBaseMessages) || resolvedBaseMessages.length === 0) {
+            resolvedBaseMessages = includeChatHistory
+                ? helpers.setOpenAIMessages?.(context?.chat || []) || []
+                : [];
+        } else if (isRawChatMessage(resolvedBaseMessages[0])) {
+            resolvedBaseMessages = helpers.setOpenAIMessages?.(resolvedBaseMessages) || [];
         }
 
-        const resolvedExamples = Array.isArray(context?.messageExamples) ? context.messageExamples : [];
-        const character = context?.characters?.[context?.characterId] || {};
+        // 2. Inject our Impersonation prompt with the UI Toggle
+        if (rawPrompt) {
+            // Read toggle (fallback to false/system if undefined)
+            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
+            const roleToUse = isUserRole ? 'user' : 'system';
+            
+            // setOpenAIMessages returns newest-first, so we prepend to put it at the very end of the chat
+            resolvedBaseMessages = [{ role: roleToUse, content: rawPrompt }, ...(resolvedBaseMessages || [])];
+        }
 
+        const resolvedExamples = Array.isArray(context?.messageExamples)
+            ? helpers.setOpenAIMessageExamples?.(context.messageExamples) || context.messageExamples
+            : [];
+
+        const character = context?.characters?.[context?.characterId] || {};
+        
+        // 3. Hand everything off to SillyTavern's Prompt Manager to finalize
         const params = {
             name2: context?.name2 || character?.name || '',
             charDescription: character?.description || '',
@@ -354,25 +370,12 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             cyclePrompt: context?.cyclePrompt || '',
             systemPromptOverride: context?.systemPromptOverride || '',
             jailbreakPromptOverride: context?.jailbreakPromptOverride || '',
-            messages: rawChat, 
+            messages: resolvedBaseMessages || [],
             messageExamples: resolvedExamples,
         };
-
-        // Let SillyTavern build the perfect history array first
-        let [messages] = await helpers.prepareOpenAIMessages(params, false);
-
-        // Then, append our impersonate prompt at the very end
-        if (rawPrompt) {
-            // Read toggle (Defaulting to 'true' / 'user' if it fails to read)
-            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? true;
-            const roleToUse = isUserRole ? 'user' : 'system';
-            
-            if (!Array.isArray(messages)) messages = [];
-            
-            // Push formatted message to the array
-            messages.push({ role: roleToUse, content: rawPrompt });
-        }
-
+        
+        const [messages] = await helpers.prepareOpenAIMessages(params, false);
+        
         if (Array.isArray(messages) && messages.length > 0) {
             debugLog(`[${extensionName}] buildChatMessagesWithPromptManager: built ${messages.length} messages`);
             return messages;
