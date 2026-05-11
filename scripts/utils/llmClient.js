@@ -339,8 +339,12 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
         }
 
         if (rawPrompt) {
+            // Check the toggle to determine the role
+            const isUserRole = extension_settings[extensionName]?.impersonateAsUser ?? false;
+            const roleToUse = isUserRole ? 'user' : 'system';
+            
             // setOpenAIMessages returns newest-first, so prepend the new prompt
-            resolvedBaseMessages = [{ role: 'user', content: rawPrompt }, ...(resolvedBaseMessages || [])];
+            resolvedBaseMessages = [{ role: roleToUse, content: rawPrompt }, ...(resolvedBaseMessages || [])];
         }
 
         const resolvedExamples = Array.isArray(context?.messageExamples)
