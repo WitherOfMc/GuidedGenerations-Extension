@@ -313,19 +313,20 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
     const originalSettings = structuredClone(helpers.oai_settings || {});
     const preset = getOpenAIPresetByName(helpers, presetName);
 
-    // Patch last user message in context.chat to strip image markdown
-    let patchedMessage = null;
-    let patchedIndex = -1;
     const { prompt = '', includeChatHistory = true, cleanupRegex = null } = options;
+
+    // Patch ALL messages in context.chat to strip matched content (e.g. image markdown)
+    const patchedMessages = [];
     if (cleanupRegex instanceof RegExp && Array.isArray(context?.chat) && context.chat.length > 0) {
-        for (let i = context.chat.length - 1; i >= 0; i--) {
-            if (context.chat[i]?.is_user) {
-                patchedIndex = i;
-                patchedMessage = context.chat[i].mes;
+        for (let i = 0; i < context.chat.length; i++) {
+            cleanupRegex.lastIndex = 0;
+            if (context.chat[i]?.mes && cleanupRegex.test(context.chat[i].mes)) {
+                cleanupRegex.lastIndex = 0;
+                patchedMessages.push({ index: i, original: context.chat[i].mes });
                 context.chat[i] = { ...context.chat[i], mes: context.chat[i].mes.replace(cleanupRegex, '').trim() };
-                break;
             }
         }
+        cleanupRegex.lastIndex = 0;
     }
 
     try {
@@ -341,7 +342,7 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
 
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
         const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-        
+
         // 1. Let SillyTavern convert the chat to "newest-first" OpenAI format
         let resolvedBaseMessages = baseMessages;
         if (!Array.isArray(resolvedBaseMessages) || resolvedBaseMessages.length === 0) {
@@ -364,7 +365,7 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             : [];
 
         const character = context?.characters?.[context?.characterId] || {};
-        
+
         // 3. Hand everything off to SillyTavern's Prompt Manager to finalize
         const params = {
             name2: context?.name2 || character?.name || '',
@@ -384,9 +385,9 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
             messages: resolvedBaseMessages || [],
             messageExamples: resolvedExamples,
         };
-        
+
         const [messages] = await helpers.prepareOpenAIMessages(params, false);
-        
+
         if (Array.isArray(messages) && messages.length > 0) {
             debugLog(`[${extensionName}] buildChatMessagesWithPromptManager: built ${messages.length} messages`);
             return messages;
@@ -394,9 +395,9 @@ async function buildChatMessagesWithPromptManager(context, baseMessages, presetN
     } catch (error) {
         debugWarn(`[${extensionName}] Failed to build messages with prompt manager:`, error);
     } finally {
-        // Restore the original message content
-        if (patchedIndex >= 0 && patchedMessage !== null) {
-            context.chat[patchedIndex] = { ...context.chat[patchedIndex], mes: patchedMessage };
+        // Restore ALL patched chat messages
+        for (const { index, original } of patchedMessages) {
+            context.chat[index] = { ...context.chat[index], mes: original };
         }
         Object.assign(helpers.oai_settings, originalSettings);
     }
