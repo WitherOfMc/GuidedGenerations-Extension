@@ -481,10 +481,8 @@ export async function requestCompletion({
         return '';
     }
 
-    const requestData = { 
-        ...requestOverrides,
-        thinking: { type: 'disabled' } 
-    };
+    const requestData = { ...requestOverrides };
+    requestData.thinking = { type: 'disabled' };
     if (mode === 'text') {
         requestData.prompt = typeof prompt === 'string' ? prompt : '';
     } else if (Array.isArray(messages) && messages.length > 0) {
@@ -541,6 +539,7 @@ export async function requestCompletion({
             };
 
             const overridePayload = buildPresetOverridePayload(presetManager, resolvedPresetName, apiId, mode);
+            overridePayload.thinking = { type: 'disabled' };
             if (Array.isArray(requestData.messages)) {
                 overridePayload.messages = requestData.messages;
             }
